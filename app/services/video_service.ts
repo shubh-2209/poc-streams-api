@@ -12,14 +12,32 @@ const execAsync = promisify(exec)
 
 export type VideoQuality    = 'lossless' | 'high' | 'medium' | 'low'
 export type VideoResolution = '360p' | '480p' | '720p' | '1080p' | '1440p' | '4k'
-export type EnhanceType     = 'denoise' | 'sharpen' | 'stabilize' | 'hdr' | 'none'
+
+export interface AdvancedFilters {
+  brightness?:  number  // -1.0 to 1.0    (0 = no change)
+  contrast?:    number  // 0.0 to 3.0     (1 = no change)
+  saturation?:  number  // 0.0 to 3.0     (1 = no change)
+  gamma?:       number  // 0.1 to 3.0     (1 = no change)
+  sharpen?:     number  // 0 to 10        (0 = off, higher = sharper)
+  denoise?:     number  // 0 to 10        (0 = off, higher = more denoising)
+  blur?:        number  // 0 to 10        (0 = off, higher = more blur)
+  vignette?:    number  // 0.0 to 1.0     (0 = off, 1 = max vignette)
+  rotate?:      number  // 0 | 90 | 180 | 270 (degrees clockwise)
+  flipH?:       boolean // horizontal flip
+  flipV?:       boolean // vertical flip
+  blackWhite?:  boolean // convert to grayscale
+  sepia?:       boolean // sepia tone effect
+  negative?:    boolean // invert colors
+  colorTemp?:   number  // -100 to 100 (negative = cooler, positive = warmer)
+  vibrance?:    number  // 0.0 to 2.0 (1 = no change, higher = more vibrant)
+}
 
 export interface ConvertOptions {
-  fileName:     string           // e.g. "abc123.mp4" (stored as "abc123.mp4.gz")
-  outputFormat: string           // e.g. "mkv"
+  fileName:     string
+  outputFormat: string
   quality:      VideoQuality
-  resolution?:  VideoResolution  // optional: scale the video
-  enhance?:     EnhanceType      // optional: apply a visual enhancement filter
+  resolution?:  VideoResolution
+  filters?:     AdvancedFilters
 }
 
 export interface ConvertResult {
@@ -28,7 +46,7 @@ export interface ConvertResult {
   outputFormat:    string
   quality:         string
   resolution:      string
-  enhance:         string
+  filtersApplied:  string[]
   originalSizeMB:  string
   convertedSizeMB: string
   savedMB:         string
@@ -39,69 +57,159 @@ export interface ConvertResult {
 
 
 const RESOLUTION_MAP: Record<VideoResolution, string> = {
-  '360p':  'scale=-2:360',   //  640×360  — mobile / low bandwidth
-  '480p':  'scale=-2:480',   //  854×480  — SD
-  '720p':  'scale=-2:720',   // 1280×720  — HD
-  
-  '1080p': 'scale=-2:1080',  // 1920×1080 — Full HD
-  '1440p': 'scale=-2:1440',  // 2560×1440 — QHD / HD+
-  '4k':    'scale=-2:2160',  // 3840×2160 — 4K UHD
-}
-
-
-const ENHANCE_MAP: Record<EnhanceType, string> = {
-  // Remove grain/noise — great for old or low-light footage
-  denoise:    'hqdn3d=4:3:6:4.5',
-
-  // Sharpen edges — makes footage look crisper
-  sharpen:    'unsharp=5:5:1.0:5:5:0.5',
-
-  // Deshake (software stabilization) — reduces camera shake
-  stabilize:  'deshake',
-
-  // Simulate HDR look — boosts contrast and vibrance
-  hdr:        'eq=contrast=1.2:brightness=0.03:saturation=1.4',
-
-  // No enhancement — pass-through
-  none:       '',
+  '360p':  'scale=-2:360',
+  '480p':  'scale=-2:480',
+  '720p':  'scale=-2:720',
+  '1080p': 'scale=-2:1080',
+  '1440p': 'scale=-2:1440',
+  '4k':    'scale=-2:2160',
 }
 
 
 export default class VideoService {
 
-  // Directories
   private uploadsDir()   { return app.makePath('storage/videos/uploads') }
   private convertedDir() { return app.makePath('storage/videos/converted') }
   private tempDir()      { return app.makePath('storage/videos/temp') }
 
-  private buildVfString(resolution?: VideoResolution, enhance?: EnhanceType): string {
-    const filters: string[] = []
+  private buildFilterChain(
+    resolution?: VideoResolution,
+    filters?: AdvancedFilters
+  ): { vfString: string; appliedFilters: string[] } {
+    const chain: string[] = []
+    const applied: string[] = []
+
+    if (!filters) filters = {}
+
+    if (filters.rotate && filters.rotate !== 0) {
+      const rotMap: Record<number, string> = {
+        90:  'transpose=1',      
+        180: 'transpose=1,transpose=1',  
+        270: 'transpose=2',      
+      }
+      if (rotMap[filters.rotate]) {
+        chain.push(rotMap[filters.rotate])
+        applied.push(`Rotate ${filters.rotate}°`)
+      }
+    }
+
+    if (filters.flipH) {
+      chain.push('hflip')
+      applied.push('Flip horizontal')
+    }
+
+    if (filters.flipV) {
+      chain.push('vflip')
+      applied.push('Flip vertical')
+    }
+
 
     if (resolution && RESOLUTION_MAP[resolution]) {
-      filters.push(RESOLUTION_MAP[resolution])
+      chain.push(RESOLUTION_MAP[resolution])
+      applied.push(`Scale to ${resolution}`)
     }
 
-    if (enhance && enhance !== 'none' && ENHANCE_MAP[enhance]) {
-      filters.push(ENHANCE_MAP[enhance])
+
+    const eqParts: string[] = []
+
+    if (filters.brightness !== undefined && filters.brightness !== 0) {
+      eqParts.push(`brightness=${filters.brightness}`)
+      applied.push(`Brightness ${filters.brightness > 0 ? '+' : ''}${filters.brightness}`)
     }
 
-    return filters.length > 0 ? `-vf "${filters.join(',')}"` : ''
+    if (filters.contrast !== undefined && filters.contrast !== 1) {
+      eqParts.push(`contrast=${filters.contrast}`)
+      applied.push(`Contrast ${filters.contrast}x`)
+    }
+
+    if (filters.saturation !== undefined && filters.saturation !== 1) {
+      eqParts.push(`saturation=${filters.saturation}`)
+      applied.push(`Saturation ${filters.saturation}x`)
+    }
+
+    if (filters.gamma !== undefined && filters.gamma !== 1) {
+      eqParts.push(`gamma=${filters.gamma}`)
+      applied.push(`Gamma ${filters.gamma}`)
+    }
+
+    if (eqParts.length > 0) {
+      chain.push(`eq=${eqParts.join(':')}`)
+    }
+
+    if (filters.colorTemp !== undefined && filters.colorTemp !== 0) {
+      const temp = filters.colorTemp / 100  // normalize to -1..1
+      if (temp > 0) {
+        chain.push(`colorchannelmixer=rr=${1 + temp * 0.3}:bb=${1 - temp * 0.3}`)
+        applied.push(`Warm tone +${filters.colorTemp}`)
+      } else if (temp < 0) {
+        chain.push(`colorchannelmixer=rr=${1 + temp * 0.3}:bb=${1 - temp * 0.3}`)
+        applied.push(`Cool tone ${filters.colorTemp}`)
+      }
+    }
+
+    if (filters.vibrance !== undefined && filters.vibrance !== 1) {
+      chain.push(`vibrance=intensity=${filters.vibrance}`)
+      applied.push(`Vibrance ${filters.vibrance}x`)
+    }
+
+
+    if (filters.denoise !== undefined && filters.denoise > 0) {
+      const strength = filters.denoise  // 0-10 scale
+      chain.push(`hqdn3d=${strength}:${strength * 0.75}:${strength * 1.5}:${strength * 1.125}`)
+      applied.push(`Denoise ${filters.denoise}/10`)
+    }
+
+    if (filters.sharpen !== undefined && filters.sharpen > 0) {
+      const amount = filters.sharpen / 10  
+      chain.push(`unsharp=5:5:${amount}:5:5:${amount * 0.5}`)
+      applied.push(`Sharpen ${filters.sharpen}/10`)
+    }
+
+    if (filters.blur !== undefined && filters.blur > 0) {
+      const radius = Math.ceil(filters.blur * 2)  
+      chain.push(`boxblur=${radius}:1`)
+      applied.push(`Blur ${filters.blur}/10`)
+    }
+
+    if (filters.vignette !== undefined && filters.vignette > 0) {
+      const angle = Math.PI / 3  
+      chain.push(`vignette=angle=${angle}:a=${filters.vignette}`)
+      applied.push(`Vignette ${(filters.vignette * 100).toFixed(0)}%`)
+    }
+
+    if (filters.blackWhite) {
+      chain.push('hue=s=0')
+      applied.push('Black & white')
+    }
+
+    if (filters.sepia) {
+      chain.push('colorchannelmixer=.393:.769:.189:0:.349:.686:.168:0:.272:.534:.131')
+      applied.push('Sepia tone')
+    }
+
+    if (filters.negative) {
+      chain.push('negate')
+      applied.push('Negative')
+    }
+
+    const vfString = chain.length > 0 ? `-vf "${chain.join(',')}"` : ''
+
+    return { vfString, appliedFilters: applied }
   }
-  
+
   private getCodecSettings(format: string, quality: VideoQuality): string {
     const map: Record<string, Record<VideoQuality, string>> = {
       mp4: {
         lossless: '-c:v libx264 -crf 0  -preset veryslow -c:a aac -b:a 192k',
         high:     '-c:v libx264 -crf 18 -preset slow     -c:a aac -b:a 192k',
         medium:   '-c:v libx264 -crf 26 -preset medium   -c:a aac -b:a 128k',
-        low:      '-c:v libx264 -crf 32 -preset veryfast  -c:a aac -b:a  96k',
+        low:      '-c:v libx264 -crf 32 -preset veryfast -c:a aac -b:a  96k',
       },
       mkv: {
-        // H.265 gives ~40% better compression than H.264 at same CRF
         lossless: '-c:v libx265 -x265-params lossless=1 -c:a aac -b:a 192k',
         high:     '-c:v libx265 -crf 22 -preset slow     -c:a aac -b:a 192k',
         medium:   '-c:v libx265 -crf 28 -preset medium   -c:a aac -b:a 128k',
-        low:      '-c:v libx265 -crf 34 -preset veryfast  -c:a aac -b:a  96k',
+        low:      '-c:v libx265 -crf 34 -preset veryfast -c:a aac -b:a  96k',
       },
       webm: {
         lossless: '-c:v libvpx-vp9 -lossless 1           -c:a libopus -b:a 192k',
@@ -110,16 +218,16 @@ export default class VideoService {
         low:      '-c:v libvpx-vp9 -crf 42 -b:v 0        -c:a libopus -b:a  96k',
       },
       avi: {
-        lossless: '-c:v ffv1 -level 3                    -c:a pcm_s16le',
-        high:     '-c:v libxvid -q:v 2                   -c:a libmp3lame -q:a 2',
-        medium:   '-c:v libxvid -q:v 5                   -c:a libmp3lame -q:a 4',
-        low:      '-c:v libxvid -q:v 10                  -c:a libmp3lame -q:a 6',
+        lossless: '-c:v ffv1 -level 3           -c:a pcm_s16le',
+        high:     '-c:v libxvid -q:v 2          -c:a libmp3lame -q:a 2',
+        medium:   '-c:v libxvid -q:v 5          -c:a libmp3lame -q:a 4',
+        low:      '-c:v libxvid -q:v 10         -c:a libmp3lame -q:a 6',
       },
       mov: {
-        lossless: '-c:v prores_ks -profile:v 4444        -c:a copy',
-        high:     '-c:v prores_ks -profile:v hq          -c:a copy',
-        medium:   '-c:v prores_ks -profile:v lt          -c:a copy',
-        low:      '-c:v prores_ks -profile:v proxy       -c:a copy',
+        lossless: '-c:v prores_ks -profile:v 4444 -c:a copy',
+        high:     '-c:v prores_ks -profile:v hq   -c:a copy',
+        medium:   '-c:v prores_ks -profile:v lt   -c:a copy',
+        low:      '-c:v prores_ks -profile:v proxy -c:a copy',
       },
       flv: {
         lossless: '-c:v libx264 -crf 0  -c:a aac -b:a 192k',
@@ -144,8 +252,6 @@ export default class VideoService {
     return map[format]?.[quality] ?? '-c:v copy -c:a copy'
   }
 
-  // ── Gzip helpers (for disk storage only) ────────────────────────────────────
-
   async compressFile(filePath: string): Promise<string> {
     const out = `${filePath}.gz`
     await pipeline(
@@ -166,14 +272,13 @@ export default class VideoService {
     return destPath
   }
 
-  
   async convertVideo(options: ConvertOptions): Promise<ConvertResult> {
-    const {
+    const { 
       fileName,
       outputFormat,
       quality,
-      resolution = undefined,
-      enhance    = 'none',
+      resolution,
+      filters
     } = options
 
     const gzInputPath = path.join(this.uploadsDir(), `${fileName}.gz`)
@@ -181,31 +286,27 @@ export default class VideoService {
       throw new Error(`Source file not found: ${fileName}.gz`)
     }
 
-    // Step 1 — Decompress
     const tempIn = path.join(this.tempDir(), fileName)
     await this.decompressFile(gzInputPath, tempIn)
 
-    // Step 2 — FFmpeg
+    const { vfString, appliedFilters } = this.buildFilterChain(resolution, filters)
+
     const outputFileName = `${cuid()}.${outputFormat}`
     const tempOut        = path.join(this.tempDir(), outputFileName)
     const codecSettings  = this.getCodecSettings(outputFormat, quality)
-    const vfString       = this.buildVfString(resolution, enhance as EnhanceType)
-    
-    // -map 0 keeps all streams (video, audio, subtitles)
-    // -movflags +faststart puts metadata at start of file (better for streaming)
+
     const ffmpegCmd = [
-      `ffmpeg`,
+      'ffmpeg',
       `-i "${tempIn}"`,
       codecSettings,
       vfString,
-      `-map 0`,
-      `-movflags +faststart`,
+      '-map 0',
+      '-movflags +faststart',
       `-y "${tempOut}"`,
     ].filter(Boolean).join(' ')
 
     await execAsync(ffmpegCmd)
 
-    // Step 3 — Compress output and save to converted/
     const finalGzPath = path.join(this.convertedDir(), `${outputFileName}.gz`)
     await pipeline(
       createReadStream(tempOut),
@@ -213,11 +314,9 @@ export default class VideoService {
       createWriteStream(finalGzPath)
     )
 
-    // Step 4 — Cleanup temp
     await unlink(tempIn)
     await unlink(tempOut)
 
-    // Calculate sizes for response info
     const originalGzSize  = statSync(gzInputPath).size
     const convertedGzSize = statSync(finalGzPath).size
     const savedBytes      = originalGzSize - convertedGzSize
@@ -231,7 +330,7 @@ export default class VideoService {
       outputFormat,
       quality,
       resolution:      resolution ?? 'original',
-      enhance:         enhance    ?? 'none',
+      filtersApplied:  appliedFilters,
       originalSizeMB:  toMB(originalGzSize),
       convertedSizeMB: toMB(convertedGzSize),
       savedMB:         toMB(Math.max(savedBytes, 0)),
@@ -241,7 +340,6 @@ export default class VideoService {
     }
   }
 
-  // ── Prepare for download ─────────────────────────────────────────────────────
 
   async prepareForDownload(
     fileName:  string,

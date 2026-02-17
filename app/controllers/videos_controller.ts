@@ -6,7 +6,7 @@ import drive from '@adonisjs/drive/services/main'
 import Video from '#models/video'
 import { videoProcessingQueue } from '#services/queue_service'
 import fs from 'node:fs'
-import type { VideoQuality, VideoResolution, EnhanceType } from '#services/video_service'
+import type { VideoQuality, VideoResolution, AdvancedFilters } from '#services/video_service'
 import VideoService from '#services/video_service'
 import { cuid } from '@adonisjs/core/helpers'
 import { unlink } from 'node:fs/promises'
@@ -14,10 +14,9 @@ import path from 'node:path'
 
 // ─── Validation constants ─────────────────────────────────────────────────────
 
-const SUPPORTED_FORMATS: string[]         = ['mp4', 'mov', 'avi', 'mkv', 'webm', 'flv', 'wmv', 'mpeg']
-const SUPPORTED_QUALITIES: VideoQuality[] = ['lossless', 'high', 'medium', 'low']
+const SUPPORTED_FORMATS: string[]              = ['mp4', 'mov', 'avi', 'mkv', 'webm', 'flv', 'wmv', 'mpeg']
+const SUPPORTED_QUALITIES: VideoQuality[]      = ['lossless', 'high', 'medium', 'low']
 const SUPPORTED_RESOLUTIONS: VideoResolution[] = ['360p', '480p', '720p', '1080p', '1440p', '4k']
-const SUPPORTED_ENHANCES: EnhanceType[]   = ['denoise', 'sharpen', 'stabilize', 'hdr', 'none']
 
 export default class VideosController {
 
@@ -273,40 +272,36 @@ export default class VideosController {
       outputFormat,
       quality    = 'medium',
       resolution,
-      enhance    = 'none',
-    } = request.only(['fileName', 'outputFormat', 'quality', 'resolution', 'enhance'])
+      filters,
+    } = request.only(['fileName', 'outputFormat', 'quality', 'resolution', 'filters'])
 
-    // Validate required
     if (!fileName || !outputFormat) {
       return response.badRequest({ error: 'fileName and outputFormat are required' })
     }
 
-    // Validate format
     if (!SUPPORTED_FORMATS.includes(outputFormat.toLowerCase())) {
       return response.badRequest({
         error: `Invalid outputFormat. Choose from: ${SUPPORTED_FORMATS.join(', ')}`,
       })
     }
 
-    // Validate quality
     if (!SUPPORTED_QUALITIES.includes(quality)) {
       return response.badRequest({
         error: `Invalid quality. Choose from: ${SUPPORTED_QUALITIES.join(', ')}`,
       })
     }
 
-    // Validate resolution (optional)
     if (resolution && !SUPPORTED_RESOLUTIONS.includes(resolution)) {
       return response.badRequest({
-        error: `Invalid resolution. Choose from: ${SUPPORTED_RESOLUTIONS.join(', ')} — or omit to keep original`,
+        error: `Invalid resolution. Choose from: ${SUPPORTED_RESOLUTIONS.join(', ')} or omit`,
       })
     }
 
-    // Validate enhance (optional)
-    if (enhance && !SUPPORTED_ENHANCES.includes(enhance)) {
-      return response.badRequest({
-        error: `Invalid enhance. Choose from: ${SUPPORTED_ENHANCES.join(', ')}`,
-      })
+    if (filters) {
+      const validationErrors = this.validateFilters(filters)
+      if (validationErrors.length > 0) {
+        return response.badRequest({ error: 'Invalid filters', details: validationErrors })
+      }
     }
 
     const service = new VideoService()
@@ -315,12 +310,58 @@ export default class VideosController {
       fileName,
       outputFormat: outputFormat.toLowerCase(),
       quality,
-      resolution,   // undefined = keep original resolution
-      enhance,
+      resolution,
+      filters: filters as AdvancedFilters | undefined,
     })
 
     return response.ok({
       message: 'Video converted successfully',
+      data: result,
+    })
+  }
+
+  async uploadAndConvert({ request, response }: HttpContext) {
+    const videoFile = request.file('video', {
+      size: '2gb',
+      extnames: SUPPORTED_FORMATS,
+    })
+
+    if (!videoFile || !videoFile.isValid) {
+      return response.badRequest({
+        error: videoFile ? videoFile.errors : 'No video file provided',
+      })
+    }
+
+    const {
+      outputFormat,
+      quality    = 'medium',
+      resolution,
+      filters,
+    } = request.only(['outputFormat', 'quality', 'resolution', 'filters'])
+
+    if (!outputFormat) {
+      return response.badRequest({ error: 'outputFormat is required' })
+    }
+
+    const fileName  = `${cuid()}.${videoFile.extname}`
+    const uploadDir = app.makePath('storage/videos/uploads')
+    const rawPath   = path.join(uploadDir, fileName)
+
+    await videoFile.move(uploadDir, { name: fileName })
+
+    const service = new VideoService()
+    await service.compressFile(rawPath)
+
+    const result = await service.convertVideo({
+      fileName,
+      outputFormat: outputFormat.toLowerCase(),
+      quality,
+      resolution,
+      filters: filters as AdvancedFilters | undefined,
+    })
+
+    return response.ok({
+      message: 'Video uploaded, converted, and stored compressed',
       data: result,
     })
   }
@@ -338,7 +379,7 @@ export default class VideosController {
 
     const source = (request.qs().source || 'converted') as 'uploads' | 'converted'
 
-    const storageDir     = source === 'uploads'
+    const storageDir = source === 'uploads'
       ? app.makePath('storage/videos/uploads')
       : app.makePath('storage/videos/converted')
 
@@ -380,5 +421,77 @@ export default class VideosController {
       //   await unlink(tempPath).catch(() => {})
       // }
     }
+  }
+
+  private validateFilters(filters: any): string[] {
+    const errors: string[] = []
+
+    if (filters.brightness !== undefined) {
+      if (typeof filters.brightness !== 'number' || filters.brightness < -1 || filters.brightness > 1) {
+        errors.push('brightness must be between -1.0 and 1.0')
+      }
+    }
+
+    if (filters.contrast !== undefined) {
+      if (typeof filters.contrast !== 'number' || filters.contrast < 0 || filters.contrast > 3) {
+        errors.push('contrast must be between 0.0 and 3.0')
+      }
+    }
+
+    if (filters.saturation !== undefined) {
+      if (typeof filters.saturation !== 'number' || filters.saturation < 0 || filters.saturation > 3) {
+        errors.push('saturation must be between 0.0 and 3.0')
+      }
+    }
+
+    if (filters.gamma !== undefined) {
+      if (typeof filters.gamma !== 'number' || filters.gamma < 0.1 || filters.gamma > 3) {
+        errors.push('gamma must be between 0.1 and 3.0')
+      }
+    }
+
+    if (filters.sharpen !== undefined) {
+      if (typeof filters.sharpen !== 'number' || filters.sharpen < 0 || filters.sharpen > 10) {
+        errors.push('sharpen must be between 0 and 10')
+      }
+    }
+
+    if (filters.denoise !== undefined) {
+      if (typeof filters.denoise !== 'number' || filters.denoise < 0 || filters.denoise > 10) {
+        errors.push('denoise must be between 0 and 10')
+      }
+    }
+
+    if (filters.blur !== undefined) {
+      if (typeof filters.blur !== 'number' || filters.blur < 0 || filters.blur > 10) {
+        errors.push('blur must be between 0 and 10')
+      }
+    }
+
+    if (filters.vignette !== undefined) {
+      if (typeof filters.vignette !== 'number' || filters.vignette < 0 || filters.vignette > 1) {
+        errors.push('vignette must be between 0.0 and 1.0')
+      }
+    }
+
+    if (filters.rotate !== undefined) {
+      if (![0, 90, 180, 270].includes(filters.rotate)) {
+        errors.push('rotate must be 0, 90, 180, or 270')
+      }
+    }
+
+    if (filters.colorTemp !== undefined) {
+      if (typeof filters.colorTemp !== 'number' || filters.colorTemp < -100 || filters.colorTemp > 100) {
+        errors.push('colorTemp must be between -100 and 100')
+      }
+    }
+
+    if (filters.vibrance !== undefined) {
+      if (typeof filters.vibrance !== 'number' || filters.vibrance < 0 || filters.vibrance > 2) {
+        errors.push('vibrance must be between 0.0 and 2.0')
+      }
+    }
+
+    return errors
   }
 }
