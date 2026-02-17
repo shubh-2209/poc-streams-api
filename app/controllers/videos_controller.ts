@@ -7,9 +7,21 @@ import Video from '#models/video'
 import { videoProcessingQueue } from '#services/queue_service'
 import fs from 'node:fs'
 import { uploadVideoToCloudinary } from '#services/cloudinary_service'
+import type { VideoQuality, VideoResolution, EnhanceType } from '#services/video_service'
+import VideoService from '#services/video_service'
+import { cuid } from '@adonisjs/core/helpers'
+import { unlink } from 'node:fs/promises'
+import path from 'node:path'
+
+// ─── Validation constants ─────────────────────────────────────────────────────
+
+const SUPPORTED_FORMATS: string[]         = ['mp4', 'mov', 'avi', 'mkv', 'webm', 'flv', 'wmv', 'mpeg']
+const SUPPORTED_QUALITIES: VideoQuality[] = ['lossless', 'high', 'medium', 'low']
+const SUPPORTED_RESOLUTIONS: VideoResolution[] = ['360p', '480p', '720p', '1080p', '1440p', '4k']
+const SUPPORTED_ENHANCES: EnhanceType[]   = ['denoise', 'sharpen', 'stabilize', 'hdr', 'none']
 
 export default class VideosController {
-x
+
   async index({ auth, response }: HttpContext) {
     // const user = await auth.authenticate()
     const videos = await Video.query()
@@ -318,5 +330,120 @@ async upload({ request, auth, response }: HttpContext) {
 
     await video.delete()
     return response.ok({ message: 'Video deleted successfully' })
+  }
+
+  async convert({ request, response }: HttpContext) {
+    const {
+      fileName,
+      outputFormat,
+      quality    = 'medium',
+      resolution,
+      enhance    = 'none',
+    } = request.only(['fileName', 'outputFormat', 'quality', 'resolution', 'enhance'])
+
+    // Validate required
+    if (!fileName || !outputFormat) {
+      return response.badRequest({ error: 'fileName and outputFormat are required' })
+    }
+
+    // Validate format
+    if (!SUPPORTED_FORMATS.includes(outputFormat.toLowerCase())) {
+      return response.badRequest({
+        error: `Invalid outputFormat. Choose from: ${SUPPORTED_FORMATS.join(', ')}`,
+      })
+    }
+
+    // Validate quality
+    if (!SUPPORTED_QUALITIES.includes(quality)) {
+      return response.badRequest({
+        error: `Invalid quality. Choose from: ${SUPPORTED_QUALITIES.join(', ')}`,
+      })
+    }
+
+    // Validate resolution (optional)
+    if (resolution && !SUPPORTED_RESOLUTIONS.includes(resolution)) {
+      return response.badRequest({
+        error: `Invalid resolution. Choose from: ${SUPPORTED_RESOLUTIONS.join(', ')} — or omit to keep original`,
+      })
+    }
+
+    // Validate enhance (optional)
+    if (enhance && !SUPPORTED_ENHANCES.includes(enhance)) {
+      return response.badRequest({
+        error: `Invalid enhance. Choose from: ${SUPPORTED_ENHANCES.join(', ')}`,
+      })
+    }
+
+    const service = new VideoService()
+
+    const result = await service.convertVideo({
+      fileName,
+      outputFormat: outputFormat.toLowerCase(),
+      quality,
+      resolution,   // undefined = keep original resolution
+      enhance,
+    })
+
+    return response.ok({
+      message: 'Video converted successfully',
+      data: result,
+    })
+  }
+
+  async download({ params, request, response }: HttpContext) {
+    // const wildcardParts = params['*']
+    // const fileName = Array.isArray(wildcardParts)
+    //   ? wildcardParts.join('/')
+    //   : (wildcardParts ?? '')
+    const fileName = params.fileName
+
+    if (!fileName) {
+      return response.badRequest({ error: 'fileName is required in the URL' })
+    }
+
+    const source = (request.qs().source || 'converted') as 'uploads' | 'converted'
+
+    const storageDir     = source === 'uploads'
+      ? app.makePath('storage/videos/uploads')
+      : app.makePath('storage/videos/converted')
+
+    const expectedGzPath = path.join(storageDir, `${fileName}.gz`)
+
+    if (!existsSync(expectedGzPath)) {
+      return response.notFound({
+        error:  'File not found',
+        detail: `No compressed file found: ${fileName}.gz in storage/videos/${source}/`,
+        hint:   'Use the exact fileName from /upload or convertedFile from /convert',
+      })
+    }
+
+    const service = new VideoService()
+    let tempPath: string | null = null
+
+    try {
+      tempPath = await service.prepareForDownload(fileName, source)
+
+      const ext = fileName.split('.').pop()?.toLowerCase() ?? 'mp4'
+      const mimeMap: Record<string, string> = {
+        mp4:  'video/mp4',
+        mkv:  'video/x-matroska',
+        webm: 'video/webm',
+        avi:  'video/x-msvideo',
+        mov:  'video/quicktime',
+        flv:  'video/x-flv',
+        wmv:  'video/x-ms-wmv',
+        mpeg: 'video/mpeg',
+      }
+
+      response.header('Content-Type', mimeMap[ext] ?? 'application/octet-stream')
+      response.header('Content-Disposition', `attachment; filename="${fileName}"`)
+
+      await response.download(tempPath)
+
+    } finally {
+      // if (tempPath && existsSync(tempPath)) {
+      //   await unlink(tempPath).catch(() => {})
+      // }
+    }
   }
 }
