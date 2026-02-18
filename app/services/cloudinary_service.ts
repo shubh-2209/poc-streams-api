@@ -7,6 +7,8 @@ cloudinary.config({
   api_secret: env.get('CLOUDINARY_API_SECRET'),
 })
 
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
 function sanitizeFilename(filename: string): string {
   return filename
     .replace(/\.[^/.]+$/, '') 
@@ -17,12 +19,14 @@ function sanitizeFilename(filename: string): string {
     || `video_${Date.now()}`
 }
 
+
 export async function uploadVideoToCloudinary(filePath: string, originalName: string) {
-  try {
     const sanitizedName = sanitizeFilename(originalName)
-    
+
     console.log(`📝 Original name: ${originalName}`)
     console.log(`✅ Sanitized name: ${sanitizedName}`)
+
+    console.log(`📹 Uploading video: ${originalName} → ${sanitizedName}`)
 
     const result = await cloudinary.uploader.upload(filePath, {
       resource_type: 'video',
@@ -49,22 +53,51 @@ export async function uploadVideoToCloudinary(filePath: string, originalName: st
       format: result.format,
       bytes: result.bytes,
     }
-  } catch (error) {
-    console.error('Cloudinary upload error:', error)
-    throw error
   }
-}
 
-export async function deleteVideoFromCloudinary(publicId: string) {
-  try {
-    const result = await cloudinary.uploader.destroy(publicId, {
-      resource_type: 'video',
+  export async function uploadGzipToCloudinary(filePath: string, originalName: string) {
+    const sanitizedName = sanitizeFilename(originalName)
+    console.log(`📦 Uploading gzip: ${originalName} → reels/compressed/${sanitizedName}.gz`)
+
+    const result = await cloudinary.uploader.upload(filePath, {
+      resource_type: 'raw',
+      folder:        'reels/compressed',
+      public_id:     `${sanitizedName}.gz`,
+      overwrite:     true,
+      access_mode:   'public',             // ← fix: makes raw file fetchable without auth
     })
-    return result
-  } catch (error) {
-    console.error('Cloudinary delete error:', error)
-    throw error
+
+    console.log(`✅ Gzip uploaded: ${result.secure_url}`)
+    console.log(`✅ Public ID: ${result.public_id}`)
+
+    return {
+      url:      result.secure_url,
+      publicId: result.public_id,
+      bytes:    result.bytes,
+    }
   }
-}
+
+
+  export function getGzipUrl(publicId: string): string {
+    return cloudinary.url(publicId, {
+      resource_type: 'raw',
+      secure:        true,
+    })
+  }
+
+
+  export async function deleteVideoFromCloudinary(publicId: string) {
+    return cloudinary.uploader.destroy(
+      publicId, 
+      { resource_type: 'video' }
+    )
+  }
+
+  export async function deleteGzipFromCloudinary(publicId: string) {
+    return cloudinary.uploader.destroy(
+      publicId, 
+      { resource_type: 'raw' }
+    )
+  }
 
 export default cloudinary

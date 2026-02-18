@@ -41,7 +41,8 @@ export default class extends BaseSchema {
         'uploaded',
         'processing',
         'ready',
-        'failed'
+        'failed',
+        'compressing'
       ]).defaultTo('uploading')
 
       table.text('error_message').nullable()  // store error if failed

@@ -69,7 +69,7 @@ export default class Video extends BaseModel {
   declare mimeType: string
 
   @column()
-  declare status: 'uploading' | 'uploaded' | 'processing' | 'ready' | 'failed'
+  declare status: 'uploading' | 'uploaded' | 'processing' | 'ready' | 'failed' | 'compressing'
 
   @column()
   declare errorMessage: string | null
