@@ -2,25 +2,20 @@ import type { HttpContext } from '@adonisjs/core/http'
 import { createReadStream, statSync, existsSync } from 'node:fs'
 import { DateTime } from 'luxon'
 import app from '@adonisjs/core/services/app'
-import drive from '@adonisjs/drive/services/main'
 import Video from '#models/video'
 import { videoProcessingQueue } from '#services/queue_service'
 import fs from 'node:fs'
 import { uploadVideoToCloudinary } from '#services/cloudinary_service'
 import type { VideoQuality, VideoResolution, AdvancedFilters } from '#services/video_service'
 import VideoService from '#services/video_service'
-import { cuid } from '@adonisjs/core/helpers'
-import { unlink } from 'node:fs/promises'
-import path from 'node:path'
-import ResponseHelper from '#helpers/response_helper'
-─────────────────────────────────────────────────────
+import { videoUploadValidator } from '#validators/video_validator'
 
 const SUPPORTED_FORMATS: string[] = ['mp4', 'mov', 'avi', 'mkv', 'webm', 'flv', 'wmv', 'mpeg']
 const SUPPORTED_QUALITIES: VideoQuality[] = ['lossless', 'high', 'medium', 'low']
 const SUPPORTED_RESOLUTIONS: VideoResolution[] = ['360p', '480p', '720p', '1080p', '1440p', '4k']
 
 export default class VideosController {
-  async index({ auth, response,i18n }: HttpContext) {
+  async index({ auth, response }: HttpContext) {
     // const user = await auth.authenticate()
     const videos = await Video.query().where('user_id', 1).orderBy('created_at', 'desc')
 
@@ -38,17 +33,14 @@ export default class VideosController {
       createdAt: video.createdAt,
     }))
 
-    return ResponseHelper.success(response, i18n.t('video.list_fetched'), {
-      count: formattedVideos.length,
-      videos: formattedVideos,
-    })
+    return response.ok({ count: formattedVideos.length, videos: formattedVideos })
   }
 
-  async show({ params, auth, response, i18n }: HttpContext) {
+  async show({ params, auth, response }: HttpContext) {
     // const user = await auth.authenticate()
     const video = await Video.query().where('id', params.id).where('user_id', 1).firstOrFail()
 
-    return ResponseHelper.success(response, i18n.t('video.details_fetched'), {
+    return response.ok({
       video: {
         id: video.id,
         title: video.title,
@@ -65,34 +57,57 @@ export default class VideosController {
     })
   }
 
-  async upload({ request, auth, response ,i18n}: HttpContext) {
-    // const user = await auth.authenticate()
+  async upload({ request, auth, response }: HttpContext) {
+    const payload = await request.validateUsing(videoUploadValidator)
+
     const userId = 1
     const uploadStartTime = Date.now()
 
     const videoFile = request.file('video', {
       extnames: ['mp4', 'avi', 'mov', 'mkv', 'webm'],
-      size: '2gb',
+      size: '90mb',
     })
 
-  if (!videoFile || !videoFile.isValid) {
-    return ResponseHelper.badRequest(
-      response,
-      i18n.t('video.invalid_file'),
-      videoFile?.errors
-    )
-  }
+    if (!videoFile) {
+      return response.badRequest({
+        error: 'No video file provided',
+        message: 'Please select a video file to upload',
+      })
+    }
+
+    if (!videoFile.isValid) {
+      return response.badRequest({
+        error: 'Invalid video file',
+        message: videoFile.errors?.[0]?.message || 'The video file is invalid',
+        details: videoFile.errors,
+      })
+    }
+
+    const maxSize = 90 * 1024 * 1024
+    if (videoFile.size && videoFile.size > maxSize) {
+      return response.badRequest({
+        error: 'File too large',
+        message: 'Video file must not exceed 90MB',
+      })
+    }
 
     const ext = videoFile.extname || 'mp4'
     const storagePath = `videos/${userId}/${Date.now()}.${ext}`
-    await videoFile.moveToDisk(storagePath)
+
+    try {
+      await videoFile.moveToDisk(storagePath)
+    } catch (error) {
+      return response.internalServerError({
+        error: 'File upload failed',
+        message: 'Failed to save video file. Please try again.',
+      })
+    }
 
     const uploadDuration = Date.now() - uploadStartTime
 
-    // Create video record in DB
     const video = await Video.create({
       userId,
-      title: request.input('title', videoFile.clientName),
+      title: payload.title,
       originalFilename: videoFile.clientName || 'unknown',
       storagePath,
       fileSize: videoFile.size || 0,
@@ -104,20 +119,17 @@ export default class VideosController {
     })
 
     try {
-      // Upload to Cloudinary and WAIT for it to complete
       const filePath = app.makePath('storage', storagePath)
       const fileName = videoFile.clientName || `video_${Date.now()}`
 
       const cloudinaryResult = await uploadVideoToCloudinary(filePath, fileName)
 
-      // Update with Cloudinary URLs
       video.cloudinaryUrl = cloudinaryResult.url
       video.cloudinaryStreamingUrl = cloudinaryResult.streamingUrl
       video.cloudinaryPublicId = cloudinaryResult.publicId
       video.status = 'uploaded'
       await video.save()
 
-      // Queue for audio/subtitle processing in background
       videoProcessingQueue
         ?.add('process-video', {
           videoId: video.id,
@@ -125,11 +137,8 @@ export default class VideosController {
         })
         .catch((err) => console.error('Queue error:', err))
 
-      // Return with streaming URL
-    return ResponseHelper.created(
-      response,
-      i18n.t('video.upload_success'),
-      {
+      return response.created({
+        message: 'Video uploaded successfully to Cloudinary',
         video: {
           id: video.id,
           title: video.title,
@@ -149,56 +158,41 @@ export default class VideosController {
       video.errorMessage = 'Cloudinary upload failed'
       await video.save()
 
-     return ResponseHelper.serverError(
-      response,
-      i18n.t('video.cloudinary_failed'),
-      {
+      return response.status(500).json({
+        error: 'Cloudinary upload failed',
+        message: err.message || 'Failed to upload video to cloud storage',
         video: {
           id: video.id,
           status: 'failed',
         },
-        error: err.message,
-      }
-    )
+      })
+    }
   }
-}
 
-  async uploadVideoConvert({ request, auth, response ,i18n}: HttpContext) {
-    // const user = await auth.authenticate()
+  async uploadVideoConvert({ request, auth, response }: HttpContext) {
     const userId = 1
 
-    // ── 1. Validate incoming file ─────────────────────────────────────────
     const videoFile = request.file('video', {
       size: '2gb',
       extnames: SUPPORTED_FORMATS,
     })
 
-     if (!videoFile) {
-    return ResponseHelper.badRequest(
-      response,
-      i18n.t('video.invalid_file')
-    )
-  }
+    if (!videoFile) {
+      return response.badRequest({ error: 'No video file provided' })
+    }
 
-  if (!videoFile.isValid) {
-    return ResponseHelper.badRequest(
-      response,
-      i18n.t('video.invalid_file'),
-      videoFile.errors
-    )
-  }
+    if (!videoFile.isValid) {
+      return response.badRequest({ errors: videoFile.errors })
+    }
 
-    // ── 2. Run full pipeline: compress → upload → persist ─────────────────
     const service = new VideoService()
 
     try {
       const video = await service.ingestUpload(videoFile, userId, request.input('title'))
 
-      // ── 3. Respond with everything the client needs ───────────────────────
-   return ResponseHelper.created(
-      response,
-      i18n.t('video.upload_success'),
-    {
+      return response.created({
+        message: 'Video compressed and uploaded successfully',
+        data: {
           id: video.id,
           title: video.title,
           originalName: video.originalFilename,
@@ -211,28 +205,25 @@ export default class VideosController {
           cloudinaryPublicId: video.cloudinaryPublicId,
           uploadedAt: video.uploadTime,
         },
-      )
+      })
     } catch (error) {
       console.error('Upload pipeline failed:', error)
-
-    return ResponseHelper.serverError(
-      response,
-      i18n.t('video.upload_failed'),
-      error.message
-    )
+      return response.internalServerError({
+        error: 'Upload pipeline failed',
+        message: error.message,
+      })
+    }
   }
-}
 
-
-  async uploadMultiple({ request, auth, response ,i18n}: HttpContext) {
+  async uploadMultiple({ request, auth, response }: HttpContext) {
     const user = await auth.authenticate()
     const videoFiles = request.files('videos', {
       extnames: ['mp4', 'avi', 'mov', 'mkv', 'webm'],
       size: '2gb',
     })
 
-const uploaded: any[] = []
-  const failed: any[] = []
+    const uploaded = []
+    const failed = []
 
     for (const file of videoFiles) {
       if (!file.isValid) {
@@ -276,28 +267,21 @@ const uploaded: any[] = []
       })
     }
 
-  return ResponseHelper.created(
-    response,
-    i18n.t('video.multiple_uploaded', {
-      count: uploaded.length,
-    }),
-    {
+    return response.created({
+      message: `${uploaded.length} uploaded`,
       uploaded,
       failed,
-    }
-  )
-}
+    })
+  }
 
-
-  async stream({ params, request, response,i18n }: HttpContext) {
+  async stream({ params, request, response }: HttpContext) {
     const video = await Video.findOrFail(params.id)
     const path = app.makePath('storage', video.storagePath)
-  if (!existsSync(path)) {
-    return ResponseHelper.notFound(
-      response,
-      i18n.t('video.file_not_found')
-    )
-  }
+
+    if (!existsSync(path)) {
+      return response.notFound({ error: 'File not found' })
+    }
+
     const stat = statSync(path)
     const size = stat.size
     const range = request.header('range')
@@ -320,13 +304,10 @@ const uploaded: any[] = []
     return response.stream(createReadStream(path))
   }
 
-  async status({ params, response,i18n }: HttpContext) {
+  async status({ params, response }: HttpContext) {
     const video = await Video.findOrFail(params.id)
 
-   return ResponseHelper.success(
-    response,
-    i18n.t('video.status_fetched'),
-    {
+    return response.ok({
       id: video.id,
       title: video.title,
       status: video.status,
@@ -356,24 +337,18 @@ const uploaded: any[] = []
     })
   }
 
-  async downloadSubtitles({ params, response,i18n }: HttpContext) {
+  async downloadSubtitles({ params, response }: HttpContext) {
     const video = await Video.findOrFail(params.id)
 
     if (!video.subtitlePath) {
-    return ResponseHelper.notFound(
-      response,
-      i18n.t('video.subtitles_not_available')
-    )
-  }
+      return response.notFound({ error: 'Subtitles not available' })
+    }
 
     const filePath = app.makePath('storage', video.subtitlePath)
 
     if (!existsSync(filePath)) {
-    return ResponseHelper.notFound(
-      response,
-      i18n.t('video.subtitles_file_missing')
-    )
-  }
+      return response.notFound({ error: 'File not found' })
+    }
 
     let content = fs.readFileSync(filePath, 'utf-8')
 
@@ -411,17 +386,13 @@ const uploaded: any[] = []
   //   return response.ok({ message: 'Video deleted successfully' })
   // }
 
-  async destroy({ params, response ,i18n }: HttpContext) {
+  async destroy({ params, response }: HttpContext) {
     const service = new VideoService()
     await service.removeVideo(params.publicId)
+    return response.ok({ message: 'Video removed from Cloudinary' })
+  }
 
-  return ResponseHelper.success(
-    response,
-    i18n.t('video.deleted_success')
-  )
-}
-
-  async convert({ request, response,i18n }: HttpContext) {
+  async convert({ request, response }: HttpContext) {
     const {
       videoId,
       outputFormat,
@@ -429,52 +400,34 @@ const uploaded: any[] = []
       resolution,
       filters,
     } = request.only(['videoId', 'outputFormat', 'quality', 'resolution', 'filters'])
+    if (!videoId || !outputFormat) {
+      return response.badRequest({ error: 'videoId and outputFormat are required' })
+    }
 
-   if (!videoId || !outputFormat) {
-    return ResponseHelper.badRequest(
-      response,
-      i18n.t('video.file_and_format_required')
-    )
-  }
-
-   if (!SUPPORTED_FORMATS.includes(outputFormat.toLowerCase())) {
-    return ResponseHelper.badRequest(
-      response,
-      i18n.t('video.invalid_format', {
-        formats: SUPPORTED_FORMATS.join(', '),
+    if (!SUPPORTED_FORMATS.includes(outputFormat.toLowerCase())) {
+      return response.badRequest({
+        error: `Invalid outputFormat. Choose from: ${SUPPORTED_FORMATS.join(', ')}`,
       })
-    )
-  }
+    }
 
-   if (!SUPPORTED_QUALITIES.includes(quality)) {
-    return ResponseHelper.badRequest(
-      response,
-      i18n.t('video.invalid_quality', {
-        qualities: SUPPORTED_QUALITIES.join(', '),
+    if (!SUPPORTED_QUALITIES.includes(quality)) {
+      return response.badRequest({
+        error: `Invalid quality. Choose from: ${SUPPORTED_QUALITIES.join(', ')}`,
       })
-    )
-  }
+    }
 
-   if (resolution && !SUPPORTED_RESOLUTIONS.includes(resolution)) {
-    return ResponseHelper.badRequest(
-      response,
-      i18n.t('video.invalid_resolution', {
-        resolutions: SUPPORTED_RESOLUTIONS.join(', '),
+    if (resolution && !SUPPORTED_RESOLUTIONS.includes(resolution)) {
+      return response.badRequest({
+        error: `Invalid resolution. Choose from: ${SUPPORTED_RESOLUTIONS.join(', ')} or omit`,
       })
-    )
-  }
+    }
 
     if (filters) {
       const validationErrors = this.validateFilters(filters)
       if (validationErrors.length > 0) {
-        return ResponseHelper.badRequest(
-        response,
-        i18n.t('video.invalid_enhance'),
-        validationErrors
-      )
+        return response.badRequest({ error: 'Invalid filters', details: validationErrors })
+      }
     }
-  }
-
 
     const service = new VideoService()
 
@@ -486,36 +439,28 @@ const uploaded: any[] = []
         resolution,
         filters: filters as AdvancedFilters | undefined,
       })
-    return ResponseHelper.success(
-      response,
-      i18n.t('video.convert_success'),
-      result
-    )
+
+      return response.ok({ message: 'Video converted successfully', data: result })
     } catch (error) {
       console.error('Convert failed:', error)
-      return ResponseHelper.serverError(
-      response,
-      i18n.t('video.convert_failed'),
-      error.message
-    )
+      return response.internalServerError({
+        error: 'Convert failed',
+        message: error.message,
+      })
+    }
   }
-}
 
-  // ─── uploadAndConvert (local only, no Cloudinary) ────────────────────────────
-
-  async uploadAndConvert({ request, response ,i18n }: HttpContext) {
+  async uploadAndConvert({ request, response }: HttpContext) {
     const videoFile = request.file('video', {
       size: '2gb',
       extnames: SUPPORTED_FORMATS,
     })
 
     if (!videoFile || !videoFile.isValid) {
-      return ResponseHelper.badRequest(
-      response,
-      i18n.t('video.invalid_file'),
-      videoFile ? videoFile.errors : null
-    )
-  }
+      return response.badRequest({
+        error: videoFile ? videoFile.errors : 'No video file provided',
+      })
+    }
 
     const {
       outputFormat,
@@ -524,12 +469,9 @@ const uploaded: any[] = []
       filters,
     } = request.only(['outputFormat', 'quality', 'resolution', 'filters'])
 
-  if (!outputFormat) {
-    return ResponseHelper.badRequest(
-      response,
-      i18n.t('video.file_and_format_required')
-    )
-  }
+    if (!outputFormat) {
+      return response.badRequest({ error: 'outputFormat is required' })
+    }
 
     const service = new VideoService()
 
@@ -542,27 +484,25 @@ const uploaded: any[] = []
         filters as AdvancedFilters | undefined
       )
 
-       return ResponseHelper.success(
-      response,
-      i18n.t('video.convert_success'),
-      result
-    )
+      return response.ok({
+        message: 'Video uploaded, converted, and stored compressed',
+        data: result,
+      })
     } catch (error) {
       console.error('uploadAndConvert failed:', error)
-     return ResponseHelper.serverError(
-      response,
-      i18n.t('video.convert_failed'),
-      error.message
-    )
+      return response.internalServerError({
+        error: 'uploadAndConvert failed',
+        message: error.message,
+      })
+    }
   }
-}
 
   // ─── download — fetches .gz from Cloudinary, decompresses, sends to client ────
   //
   // Route: GET /videos/:id/download
   // :id is the DB id of the converted video record
 
-  async download({ params, response,i18n }: HttpContext) {
+  async download({ params, response }: HttpContext) {
     const service = new VideoService()
     let tempPath: string | null = null
 
@@ -576,11 +516,10 @@ const uploaded: any[] = []
       await response.download(tempPath)
     } catch (error) {
       console.error('Download failed:', error)
-    return ResponseHelper.serverError(
-      response,
-      i18n.t('video.download_failed'),
-      error.message
-    )
+      return response.internalServerError({
+        error: 'Download failed',
+        message: error.message,
+      })
     } finally {
       // Delete temp decompressed file after response is sent
       // if (tempPath) {
@@ -588,71 +527,71 @@ const uploaded: any[] = []
       // }
     }
   }
-
-  private validateFilters(filters: any, i18n: any): string[] {
+  private validateFilters(filters: any): string[] {
     const errors: string[] = []
 
     if (
       filters.brightness !== undefined &&
       (typeof filters.brightness !== 'number' || filters.brightness < -1 || filters.brightness > 1)
     )
-         errors.push(i18n.t('video.filters.brightness'))
+      errors.push('brightness must be between -1.0 and 1.0')
 
     if (
       filters.contrast !== undefined &&
       (typeof filters.contrast !== 'number' || filters.contrast < 0 || filters.contrast > 3)
     )
-   errors.push(i18n.t('video.filters.contrast'))
+      errors.push('contrast must be between 0.0 and 3.0')
 
     if (
       filters.saturation !== undefined &&
       (typeof filters.saturation !== 'number' || filters.saturation < 0 || filters.saturation > 3)
     )
-        errors.push(i18n.t('video.filters.saturation'))
+      errors.push('saturation must be between 0.0 and 3.0')
 
     if (
       filters.gamma !== undefined &&
       (typeof filters.gamma !== 'number' || filters.gamma < 0.1 || filters.gamma > 3)
     )
-         errors.push(i18n.t('video.filters.gamma'))
+      errors.push('gamma must be between 0.1 and 3.0')
 
     if (
       filters.sharpen !== undefined &&
       (typeof filters.sharpen !== 'number' || filters.sharpen < 0 || filters.sharpen > 10)
     )
-         errors.push(i18n.t('video.filters.sharpen'))
+      errors.push('sharpen must be between 0 and 10')
 
     if (
       filters.denoise !== undefined &&
       (typeof filters.denoise !== 'number' || filters.denoise < 0 || filters.denoise > 10)
     )
-       errors.push(i18n.t('video.filters.denoise'))
+      errors.push('denoise must be between 0 and 10')
 
     if (
       filters.blur !== undefined &&
       (typeof filters.blur !== 'number' || filters.blur < 0 || filters.blur > 10)
     )
-         errors.push(i18n.t('video.filters.blur'))
+      errors.push('blur must be between 0 and 10')
 
     if (
       filters.vignette !== undefined &&
       (typeof filters.vignette !== 'number' || filters.vignette < 0 || filters.vignette > 1)
     )
-         errors.push(i18n.t('video.filters.vignette'))
+      errors.push('vignette must be between 0.0 and 1.0')
+
     if (filters.rotate !== undefined && ![0, 90, 180, 270].includes(filters.rotate))
-          errors.push(i18n.t('video.filters.rotate'))
+      errors.push('rotate must be 0, 90, 180, or 270')
 
     if (
       filters.colorTemp !== undefined &&
       (typeof filters.colorTemp !== 'number' || filters.colorTemp < -100 || filters.colorTemp > 100)
     )
-     errors.push(i18n.t('video.filters.colorTemp'))
+      errors.push('colorTemp must be between -100 and 100')
 
     if (
       filters.vibrance !== undefined &&
       (typeof filters.vibrance !== 'number' || filters.vibrance < 0 || filters.vibrance > 2)
     )
-      errors.push(i18n.t('video.filters.vibrance'))
+      errors.push('vibrance must be between 0.0 and 2.0')
 
     return errors
   }

@@ -1,126 +1,77 @@
-// app/validators/auth_validator.ts
 import vine from '@vinejs/vine'
+import { FieldContext } from '@vinejs/vine/types'
 
-/**
- * ══════════════════════════════════════════════════════════════
- * REGISTER VALIDATOR
- * ══════════════════════════════════════════════════════════════
- * Validates user registration data
- * 
- * Expected input:
- * {
- *   "full_name": "Test User",
- *   "email": "test@example.com",
- *   "password": "secret123"
- * }
- */
+const passwordValidator = vine.createRule(async (value: unknown, _options: any, field: FieldContext) => {
+  if (typeof value !== 'string') {
+    field.report('Password must be a string', 'password', field)
+    return
+  }
+  const errors: string[] = []
+
+  if (value.length < 8) {
+    errors.push('at least 8 characters')
+  }
+
+  if (value.length > 50) {
+    errors.push('maximum 50 characters')
+  }
+
+  if (!/(?=.*[a-z])/.test(value)) {
+    errors.push('one lowercase letter')
+  }
+
+  if (!/(?=.*[A-Z])/.test(value)) {
+    errors.push('one uppercase letter')
+  }
+
+  if (!/(?=.*\d)/.test(value)) {
+    errors.push('one number')
+  }
+
+  if (errors.length > 0) {
+    field.report(
+      `Password must contain: ${errors.join(', ')}`,
+      'passwordStrength',
+      field
+    )
+  }
+})
+
 export const registerValidator = vine.compile(
   vine.object({
-    /**
-     * Full Name
-     * - Required
-     * - Minimum 2 characters
-     * - Maximum 100 characters
-     * - Automatically trimmed (removes extra spaces)
-     */
+
     full_name: vine
       .string()
       .trim()
-      .minLength(2)
-      .maxLength(100),
+      .minLength(3)
+      .maxLength(50)
+      .regex(/^[a-zA-Z\s]+$/),
 
-    /**
-     * Email
-     * - Required
-     * - Must be valid email format
-     * - Normalized (lowercase, trimmed)
-     * - Example: "Test@Example.COM" → "test@example.com"
-     */
     email: vine
       .string()
       .email()
+      .maxLength(100)
       .normalizeEmail(),
 
-    /**
-     * Password
-     * - Required
-     * - Minimum 6 characters
-     * - Maximum 100 characters
-     * - No trimming (spaces allowed in password)
-     */
     password: vine
       .string()
-      .minLength(6)
-      .maxLength(100),
+      .use(passwordValidator()),
   })
 )
 
-/**
- * ══════════════════════════════════════════════════════════════
- * LOGIN VALIDATOR
- * ══════════════════════════════════════════════════════════════
- * Validates login credentials
- * 
- * Expected input:
- * {
- *   "email": "test@example.com",
- *   "password": "secret123"
- * }
- */
+
 export const loginValidator = vine.compile(
   vine.object({
-    /**
-     * Email
-     * - Required
-     * - Must be valid email format
-     * - Normalized
-     */
+
     email: vine
       .string()
       .email()
+      .maxLength(100)
       .normalizeEmail(),
 
-    /**
-     * Password
-     * - Required
-     * - Minimum 1 character (allow any password for login)
-     */
     password: vine
       .string()
-      .minLength(1),
+      .minLength(1)
+      .maxLength(100),
   })
 )
-
-/**
- * ══════════════════════════════════════════════════════════════
- * USAGE IN CONTROLLER
- * ══════════════════════════════════════════════════════════════
- * 
- * import { registerValidator, loginValidator } from '#validators/auth_validator'
- * 
- * async register({ request }: HttpContext) {
- *   const data = await request.validateUsing(registerValidator)
- *   // data is now validated and typed!
- *   // data.email, data.password, data.full_name
- * }
- * 
- * ══════════════════════════════════════════════════════════════
- * ERROR RESPONSES (Automatic)
- * ══════════════════════════════════════════════════════════════
- * 
- * If validation fails, AdonisJS automatically returns 422:
- * {
- *   "errors": [
- *     {
- *       "field": "email",
- *       "rule": "email",
- *       "message": "The email field must be a valid email"
- *     },
- *     {
- *       "field": "password",
- *       "rule": "minLength",
- *       "message": "The password field must have at least 6 characters"
- *     }
- *   ]
- * }
- */
