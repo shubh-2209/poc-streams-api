@@ -28,7 +28,7 @@ export default class LiveStreamService {
 
   static configure() {
     cloudinary.config({
-      cloud_name: process.env.CLOUDINARY_NAME,
+      cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
       api_key: process.env.CLOUDINARY_API_KEY,
       api_secret: process.env.CLOUDINARY_API_SECRET,
     })
@@ -140,6 +140,7 @@ export default class LiveStreamService {
         title: session.title,
         originalFilename: `stream_${sessionId}.mp4`,
         storagePath: cloudinaryResult.cloudinaryUrl!,
+        cloudinaryStreamingUrl:cloudinaryResult.cloudinaryUrl!,
         extension: 'mp4',
         mimeType: 'video/mp4',
         fileSize: buffer.length,
@@ -181,7 +182,7 @@ export default class LiveStreamService {
     title: string
   ): Promise<{ success: boolean; cloudinaryUrl?: string }> {
     try {
-      if (!process.env.CLOUDINARY_NAME || !process.env.CLOUDINARY_API_KEY || !process.env.CLOUDINARY_API_SECRET) {
+      if (!process.env.CLOUDINARY_CLOUD_NAME || !process.env.CLOUDINARY_API_KEY || !process.env.CLOUDINARY_API_SECRET) {
         throw new Error('Cloudinary environment variables not configured')
       }
 
