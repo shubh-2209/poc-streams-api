@@ -38,12 +38,6 @@ coverage
 *.pid.lock
 *.seed
 
-
-# Frontend assets compiled code
-public/assets
-public/thumbnails
-public/uploads
-
 # =========================
 # OS / Editor files
 # =========================
