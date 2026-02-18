@@ -63,6 +63,7 @@ export interface ConvertResult {
   compressionRate: string
   convertedAt:     string
   downloadPath:    string
+  id:              number
 }
 
 const RESOLUTION_MAP: Record<VideoResolution, string> = {
@@ -198,6 +199,7 @@ export default class VideoService {
       compressionRate: `${((savedBytes / sourceSizeBytes) * 100).toFixed(1)}%`,
       convertedAt:     new Date().toISOString(),
       downloadPath:    `/videos/${convertedVideo.id}/download`,
+      id : convertedVideo.id
     }
   }
 
