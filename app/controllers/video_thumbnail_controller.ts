@@ -1,79 +1,65 @@
 import type { HttpContext } from '@adonisjs/core/http'
 import VideoThumbnailService from '#services/video_thumbnail_service'
-
+import ResponseHelper from '../utils/response_helper.js'
 // Module-level instantiation (AdonisJS v6 me constructor kaam nahi karta)
 const videoThumbnailService = new VideoThumbnailService()
 
 export default class VideoThumbnailController {
+  // POST /api/v1/upload
+  async uploadVideo({ request, response, i18n }: HttpContext) {
+    try {
+      const videoFile = request.file('video')
 
-    // POST /api/v1/upload
-    async uploadVideo({ request, response }: HttpContext) {
-        try {
-            const videoFile = request.file('video')
+      if (!videoFile) {
+        return ResponseHelper.badRequest(response, i18n.t('thumbnail.no_video_provided'))
+      }
 
-            if (!videoFile) {
-                return response.status(400).json({
-                    success: false,
-                    message: 'No video file provided',
-                })
-            }
+      const customThumbnailFile = request.file('thumbnail') ?? undefined
 
-            const customThumbnailFile = request.file('thumbnail') ?? undefined
+      const result = await videoThumbnailService.processVideoUpload(videoFile, customThumbnailFile)
 
-            const result = await videoThumbnailService.processVideoUpload(
-                videoFile,
-                customThumbnailFile
-            )
-
-            return response.json({
-                success: true,
-                message: 'Video processed successfully',
-                data: result,
-            })
-        } catch (error: any) {
-            console.error('❌ Upload error:', error)
-            return response.status(500).json({
-                success: false,
-                message: error.message,
-            })
-        }
+      return ResponseHelper.success(response, i18n.t('thumbnail.video_processed'), result)
+    } catch (error: any) {
+      return ResponseHelper.serverError(response, i18n.t('thumbnail.processing_failed'), error)
     }
+  }
 
-    // GET /api/v1/videos/:id/thumbnails
-    async getThumbnails({ params, response }: HttpContext) {
-        try {
-            const files = await videoThumbnailService.getVideoFiles(params.id)
+  // GET /api/v1/videos/:id/thumbnails
+  async getThumbnails({ params, response ,i18n }: HttpContext) {
+    try {
+      const files = await videoThumbnailService.getVideoFiles(params.id)
 
-            return response.json({
-                success: true,
-                count: files.length,
-                data: files,
-            })
-        } catch (error: any) {
-            return response.status(404).json({
-                success: false,
-                message: 'Video folder not found',
-            })
-        }
+      return ResponseHelper.success(response, i18n.t('thumbnail.thumbnails_fetched'), {
+        count: files.length,
+        files,
+      })
+    } catch (error: any) {
+      return ResponseHelper.notFound(response, i18n.t('thumbnail.video_folder_not_found'), error)
     }
+  }
 
-    // GET /api/v1/videos
-    async getVideos({ response }: HttpContext) {
-        try {
-            const videos = await videoThumbnailService.getAllVideos()
+  // GET /api/v1/videos
 
-            return response.json({
-                success: true,
-                count: videos.length,
-                data: videos,
-            })
-        } catch (error: any) {
-            return response.json({
-                success: true,
-                count: 0,
-                data: [],
-                message: 'No videos processed yet',
-            })
-        }
-    }
+async getVideos({ response, i18n }: HttpContext) {
+  try {
+    const videos = await videoThumbnailService.getAllVideos()
+
+    return ResponseHelper.success(
+      response,
+      '',
+      {
+        count: videos.length,
+        data: videos,
+      }
+    )
+  } catch (error: any) {
+    return ResponseHelper.success(
+      response,
+      i18n.t('thumbnail.no_videos_yet'),
+      {
+        count: 0,
+        data: [],
+      }
+    )
+  }
 }

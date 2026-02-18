@@ -3,24 +3,23 @@ import User from '#models/user'
 import { loginValidator, registerValidator } from '#validators/auth_validator'
 
 export default class AuthController {
-
   async register({ request, response }: HttpContext) {
     const data = await request.validateUsing(registerValidator)
 
     const existing = await User.findBy('email', data.email)
     if (existing) {
-      return response.conflict({ 
+      return response.conflict({
         error: 'Email already registered',
-        message: 'This email is already in use. Please use a different email or login.'
+        message: 'This email is already in use. Please use a different email or login.',
       })
     }
 
     const sanitizedFullName = data.full_name.replace(/\s+/g, ' ').trim()
-    
+
     if (sanitizedFullName.length < 3) {
       return response.badRequest({
         error: 'Invalid full name',
-        message: 'Full name must be at least 3 characters after removing extra spaces'
+        message: 'Full name must be at least 3 characters after removing extra spaces',
       })
     }
 
@@ -28,7 +27,7 @@ export default class AuthController {
       const user = await User.create({
         fullName: sanitizedFullName,
         email: data.email,
-        password: data.password,  
+        password: data.password,
       })
 
       return response.created({
@@ -42,7 +41,7 @@ export default class AuthController {
     } catch (error) {
       return response.internalServerError({
         error: 'Registration failed',
-        message: 'An error occurred during registration. Please try again.'
+        message: 'An error occurred during registration. Please try again.',
       })
     }
   }
@@ -54,7 +53,7 @@ export default class AuthController {
     if (!userExists) {
       return response.unauthorized({
         error: 'Invalid credentials',
-        message: 'Email or password is incorrect'
+        message: 'Email or password is incorrect',
       })
     }
 
@@ -68,7 +67,7 @@ export default class AuthController {
 
       return response.ok({
         message: 'Login successful',
-        token: token.value!.release(), 
+        token: token.value!.release(),
         user: {
           id: user.id,
           fullName: user.fullName,
@@ -78,7 +77,7 @@ export default class AuthController {
     } catch (error) {
       return response.unauthorized({
         error: 'Invalid credentials',
-        message: 'Email or password is incorrect'
+        message: 'Email or password is incorrect',
       })
     }
   }
@@ -86,23 +85,23 @@ export default class AuthController {
   async logout({ auth, response }: HttpContext) {
     try {
       const user = await auth.authenticate()
-      
+
       if (!user.currentAccessToken) {
         return response.badRequest({
           error: 'No active session',
-          message: 'No active session found to logout'
+          message: 'No active session found to logout',
         })
       }
 
       await User.accessTokens.delete(user, user.currentAccessToken.identifier)
 
-      return response.ok({ 
-        message: 'Logged out successfully' 
+      return response.ok({
+        message: 'Logged out successfully',
       })
     } catch (error) {
       return response.unauthorized({
         error: 'Logout failed',
-        message: 'Unable to logout. Please try again.'
+        message: 'Unable to logout. Please try again.',
       })
     }
   }
@@ -110,12 +109,12 @@ export default class AuthController {
   async me({ auth, response }: HttpContext) {
     try {
       const user = await auth.authenticate()
-      
+
       const userExists = await User.find(user.id)
       if (!userExists) {
         return response.notFound({
           error: 'User not found',
-          message: 'User account no longer exists'
+          message: 'User account no longer exists',
         })
       }
 
@@ -130,7 +129,7 @@ export default class AuthController {
     } catch (error) {
       return response.unauthorized({
         error: 'Authentication failed',
-        message: 'Unable to fetch user details. Please login again.'
+        message: 'Unable to fetch user details. Please login again.',
       })
     }
   }

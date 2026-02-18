@@ -1,0 +1,95 @@
+{
+  "auth": {
+    "email_already_registered": "Email already registered",
+    "registration_success": "Registration successful",
+    "login_success": "Login successful",
+    "logout_success": "Logged out successfully",
+    "invalid_credentials": "Invalid email or password",
+    "unauthorized": "Unauthorized access"
+  },
+  "validation": {
+    "required": "The {{ field }} field is required.",
+    "email": "Please provide a valid email address.",
+    "min_length": "The {{ field }} must be at least {{ min }} characters.",
+    "confirmed": "The {{ field }} confirmation does not match."
+  },
+  "general": {
+    "something_went_wrong": "Something went wrong. Please try again later."
+  },
+
+  "audio": {
+    "audio_not_extracted": "Audio not yet extracted. Please check status first.",
+    "audio_missing": "Audio file missing from disk.",
+    "clean_not_ready": "Clean audio not yet processed. Please check status first.",
+    "clean_missing": "Clean audio file missing from disk.",
+    "source_video_not_found": "Source video file not found.",
+    "processing_complete": "Audio processing completed successfully.",
+    "processing_failed": "Audio processing failed.",
+    "ffmpeg_hint": "Make sure FFmpeg is installed and accessible: ffmpeg -version"
+  },
+  "video": {
+    "list_fetched": "Video list fetched successfully.",
+    "details_fetched": "Video details fetched successfully.",
+
+    "upload_success": "Video uploaded successfully to Cloudinary.",
+    "multiple_uploaded": "{{ count }} videos uploaded successfully.",
+    "invalid_file": "No video file provided or invalid file.",
+    "upload_failed": "Video upload failed.",
+    "cloudinary_failed": "Cloudinary upload failed.",
+
+    "file_not_found": "File not found.",
+    "filename_required": "fileName is required in the URL.",
+    "source_file_missing": "Source video file not found on disk.",
+
+    "deleted_success": "Video deleted successfully.",
+
+    "status_fetched": "Video status fetched successfully.",
+    "processing_started": "Video processing started.",
+    "processing_completed": "Video processing completed successfully.",
+    "processing_failed": "Video processing failed.",
+
+    "subtitles_not_available": "Subtitles not available.",
+    "subtitles_file_missing": "Subtitle file missing from disk.",
+
+    "convert_success": "Video converted successfully.",
+    "convert_failed": "Video conversion failed.",
+    "file_and_format_required": "fileName and outputFormat are required.",
+
+    "invalid_format": "Invalid output format. Choose from: {{ formats }}",
+    "invalid_quality": "Invalid quality. Choose from: {{ qualities }}",
+    "invalid_resolution": "Invalid resolution. Choose from: {{ resolutions }}",
+    "invalid_enhance": "Invalid enhance option. Choose from: {{ enhances }}",
+
+    "stream_not_available": "Video stream not available.",
+    "download_preparing": "Preparing file for download.",
+    "download_failed": "Download preparation failed.",
+
+    "unauthorized_access": "You are not authorized to access this video.",
+    "video_not_found": "Video not found.",
+    "filters": {
+      "brightness": "Brightness must be between -1.0 and 1.0",
+      "contrast": "Contrast must be between 0.0 and 3.0",
+      "saturation": "Saturation must be between 0.0 and 3.0",
+      "gamma": "Gamma must be between 0.1 and 3.0",
+      "sharpen": "Sharpen must be between 0 and 10",
+      "denoise": "Denoise must be between 0 and 10",
+      "blur": "Blur must be between 0 and 10",
+      "vignette": "Vignette must be between 0.0 and 1.0",
+      "rotate": "Rotate must be 0, 90, 180, or 270",
+      "colorTemp": "Color temperature must be between -100 and 100",
+      "vibrance": "Vibrance must be between 0.0 and 2.0"
+    }
+  },
+  "thumbnail": {
+    "no_video_provided": "No video file provided.",
+    "video_processed": "Video processed successfully.",
+    "invalid_duration": "Invalid video duration.",
+    "processing_failed": "Video processing failed.",
+    "thumbnails_not_found": "No thumbnails found for this video.",
+    "video_folder_not_found": "Video folder not found.",
+    "thumbnails_fetched": "Thumbnails fetched successfully.",
+    "videos_fetched": "Processed videos fetched successfully.",
+    "no_videos_yet": "No videos processed yet.",
+    "internal_error": "Something went wrong while processing the video."
+  }
+}

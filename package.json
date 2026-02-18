@@ -48,7 +48,7 @@
     "hot-hook": "^0.4.0",
     "pino-pretty": "^13.0.0",
     "prettier": "^3.5.3",
-    "ts-node-maintained": "^10.9.5",
+    "ts-node-maintained": "^10.9.6",
     "typescript": "~5.8"
   },
   "dependencies": {
@@ -56,6 +56,7 @@
     "@adonisjs/core": "^6.18.0",
     "@adonisjs/cors": "^2.2.1",
     "@adonisjs/drive": "^3.4.1",
+    "@adonisjs/i18n": "^2.2.3",
     "@adonisjs/lucid": "^21.6.1",
     "@adonisjs/session": "^7.7.1",
     "@ffmpeg-installer/ffmpeg": "^1.1.0",
