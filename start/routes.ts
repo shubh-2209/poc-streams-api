@@ -57,14 +57,6 @@ router.group(() => {
 
 }).prefix('/api')
 
-router.group(() => {
-
-  router.post('/upload', [VideoThumbnailController, 'uploadVideo'])
-  router.get('/videos', [VideoThumbnailController, 'getVideos'])
-  router.get('/videos/:id/thumbnails', [VideoThumbnailController, 'getThumbnails'])
-
-}).prefix('/api/v1') 
-
 // routes/live_streams.ts
 const LiveStreamsController = () => import('#controllers/live_streams_controller')
   router

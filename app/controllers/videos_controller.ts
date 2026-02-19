@@ -2,18 +2,13 @@ import type { HttpContext } from '@adonisjs/core/http'
 import { createReadStream, statSync, existsSync } from 'node:fs'
 import { DateTime } from 'luxon'
 import app from '@adonisjs/core/services/app'
-import drive from '@adonisjs/drive/services/main'
 import Video from '#models/video'
 import { videoProcessingQueue } from '#services/queue_service'
 import fs from 'node:fs'
 import { uploadVideoToCloudinary } from '#services/cloudinary_service'
 import type { VideoQuality, VideoResolution,AdvancedFilters } from '#services/video_service'
 import VideoService from '#services/video_service'
-import { cuid } from '@adonisjs/core/helpers'
-import { unlink } from 'node:fs/promises'
-import path from 'node:path'
-
-// ─── Validation constants ─────────────────────────────────────────────────────
+import { videoUploadValidator } from '#validators/video_validator'
 
 const SUPPORTED_FORMATS: string[]              = ['mp4', 'mov', 'avi', 'mkv', 'webm', 'flv', 'wmv', 'mpeg']
 const SUPPORTED_QUALITIES: VideoQuality[]      = ['lossless', 'high', 'medium', 'low']
@@ -69,32 +64,56 @@ export default class VideosController {
   }
 
 async upload({ request, auth, response }: HttpContext) {
-  // const user = await auth.authenticate()
+  const payload = await request.validateUsing(videoUploadValidator)
+  
   const userId = 1
   const uploadStartTime = Date.now()
 
   const videoFile = request.file('video', {
     extnames: ['mp4', 'avi', 'mov', 'mkv', 'webm'],
-    size: '2gb',
+    size: '90mb', 
   })
 
-  if (!videoFile || !videoFile.isValid) {
+  if (!videoFile) {
     return response.badRequest({
-      error: 'No video file provided or invalid',
-      details: videoFile?.errors,
+      error: 'No video file provided',
+      message: 'Please select a video file to upload'
+    })
+  }
+
+  if (!videoFile.isValid) {
+    return response.badRequest({
+      error: 'Invalid video file',
+      message: videoFile.errors?.[0]?.message || 'The video file is invalid',
+      details: videoFile.errors,
+    })
+  }
+
+  const maxSize = 90 * 1024 * 1024 
+  if (videoFile.size && videoFile.size > maxSize) {
+    return response.badRequest({
+      error: 'File too large',
+      message: 'Video file must not exceed 90MB'
     })
   }
 
   const ext = videoFile.extname || 'mp4'
   const storagePath = `videos/${userId}/${Date.now()}.${ext}`
-  await videoFile.moveToDisk(storagePath)
+  
+  try {
+    await videoFile.moveToDisk(storagePath)
+  } catch (error) {
+    return response.internalServerError({
+      error: 'File upload failed',
+      message: 'Failed to save video file. Please try again.'
+    })
+  }
 
   const uploadDuration = Date.now() - uploadStartTime
 
-  // Create video record in DB
   const video = await Video.create({
     userId,
-    title: request.input('title', videoFile.clientName),
+    title: payload.title,
     originalFilename: videoFile.clientName || 'unknown',
     storagePath,
     fileSize: videoFile.size || 0,
@@ -106,26 +125,22 @@ async upload({ request, auth, response }: HttpContext) {
   })
 
   try {
-    // Upload to Cloudinary and WAIT for it to complete
     const filePath = app.makePath('storage', storagePath)
     const fileName = videoFile.clientName || `video_${Date.now()}`
     
     const cloudinaryResult = await uploadVideoToCloudinary(filePath, fileName)
 
-    // Update with Cloudinary URLs
     video.cloudinaryUrl = cloudinaryResult.url
     video.cloudinaryStreamingUrl = cloudinaryResult.streamingUrl
     video.cloudinaryPublicId = cloudinaryResult.publicId
     video.status = 'uploaded'
     await video.save()
 
-    // Queue for audio/subtitle processing in background
     videoProcessingQueue?.add('process-video', {
       videoId: video.id,
       storagePath: filePath,
     }).catch(err => console.error('Queue error:', err))
 
-    // Return with streaming URL
     return response.created({
       message: 'Video uploaded successfully to Cloudinary',
       video: {
@@ -150,7 +165,7 @@ async upload({ request, auth, response }: HttpContext) {
 
     return response.status(500).json({
       error: 'Cloudinary upload failed',
-      message: err.message,
+      message: err.message || 'Failed to upload video to cloud storage',
       video: {
         id: video.id,
         status: 'failed'
@@ -160,10 +175,8 @@ async upload({ request, auth, response }: HttpContext) {
 }
 
     async uploadVideoConvert({ request, auth, response }: HttpContext) {
-    // const user = await auth.authenticate()
     const userId = 1
 
-    // ── 1. Validate incoming file ─────────────────────────────────────────
     const videoFile = request.file('video', {
       size:     '2gb',
       extnames: SUPPORTED_FORMATS,
@@ -177,7 +190,6 @@ async upload({ request, auth, response }: HttpContext) {
       return response.badRequest({ errors: videoFile.errors })
     }
 
-    // ── 2. Run full pipeline: compress → upload → persist ─────────────────
     const service = new VideoService()
 
     try {
@@ -187,7 +199,6 @@ async upload({ request, auth, response }: HttpContext) {
         request.input('title')
       )
 
-      // ── 3. Respond with everything the client needs ───────────────────────
       return response.created({
         message: 'Video compressed and uploaded successfully',
         data: {
@@ -449,7 +460,6 @@ async upload({ request, auth, response }: HttpContext) {
     }
   }
 
-  // ─── uploadAndConvert (local only, no Cloudinary) ────────────────────────────
 
   async uploadAndConvert({ request, response }: HttpContext) {
     const videoFile = request.file('video', {
