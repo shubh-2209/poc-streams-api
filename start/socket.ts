@@ -14,12 +14,24 @@ interface LiveStream {
 let io: Server
 const liveStreams = new Map<string, LiveStream>()
 
-app.ready(() => {
-  io = new Server(server.getNodeServer(), {
+app.ready(async () => {
+  const httpServer = server.getNodeServer()
+
+  if (!httpServer) {
+    console.error('❌ HTTP server not available')
+    return
+  }
+
+  io = new Server(httpServer, {
     cors: {
       origin: '*',
       methods: ['GET', 'POST'],
+      allowedHeaders: ['ngrok-skip-browser-warning'],
+      credentials: false,
     },
+    transports: ['polling', 'websocket'],
+    allowUpgrades: true,
+    path: '/socket.io/',          
     maxHttpBufferSize: 1e8,
   })
 
