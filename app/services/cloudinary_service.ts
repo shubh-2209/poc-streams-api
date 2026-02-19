@@ -33,7 +33,8 @@ export async function uploadVideoToCloudinary(filePath: string, originalName: st
       folder: 'reels',
       public_id: sanitizedName,
       overwrite: true,
-      transformation: [
+      eager_async: true, // Enable async transformation for large videos
+      eager: [
         { quality: 'auto', fetch_format: 'auto' },
       ],
     })
