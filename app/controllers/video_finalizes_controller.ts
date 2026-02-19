@@ -1,5 +1,7 @@
 import { HttpContext } from '@adonisjs/core/http'
 import VideoFinalizeService from '#services/video_finalize_service'
+import Video from '#models/video'
+import { DateTime } from 'luxon'
 
 export default class VideoFinalizeController {
   /**
@@ -63,6 +65,26 @@ export default class VideoFinalizeController {
         videoId: result.videoId,
         duration: result.duration,
         processingStatus: result.processingStatus,
+      })
+      
+      const extension = result.finalUrl.split('.').pop();
+      const lastPart = result.videoId.split('/').pop();
+      const originalName = `${lastPart}.${extension}`
+
+      const video = await Video.create({
+        userId: 1,
+        title: lastPart,
+        originalFilename: originalName || 'unknown',
+        storagePath: result.uploaded.public_id, // ✅ FIXED
+        fileSize: result.uploaded.bytes,
+        mimeType: `video/${result.uploaded.format}`,
+        status: 'uploaded',
+        extension: result.uploaded.format,
+        uploadTime: DateTime.now(),
+        uploadDuration: result.uploaded.duration,
+        cloudinaryPublicId: result.uploaded.public_id,
+        cloudinaryUrl: result.uploaded.secure_url,
+        cloudinaryStreamingUrl:result.uploaded.playback_url
       })
 
       return response.json({
