@@ -75,6 +75,12 @@ const RESOLUTION_MAP: Record<VideoResolution, string> = {
   '4k':    'scale=-2:2160',
 }
 
+export interface VideoPayload {
+  type?:      'reel' | 'video'
+  userId?: string
+  sortType? : 'asc' | 'desc'
+}
+
 export default class VideoService {
 
   private tmpDir()       { return app.makePath('storage/videos/tmp') }
@@ -87,6 +93,28 @@ export default class VideoService {
       mkdir(this.convertedDir(), { recursive: true }),
       mkdir(this.tempDir(),      { recursive: true }),
     ])
+  }
+
+  async getAllData( payload:VideoPayload ){
+ 
+    const { type ,userId,sortType} = payload;
+ 
+    let videoQuery = Video.query();
+ 
+ 
+    if(userId){
+      videoQuery.where( 'user_id' , userId)
+    }
+ 
+    if(type){
+      videoQuery.where( 'type' , type)
+    }
+ 
+    if(sortType){
+      videoQuery.orderBy('created_at',sortType)
+    }
+ 
+    return await videoQuery;
   }
 
   // ─── UPLOAD → Cloudinary ──────────────────────────────────────────────────────
