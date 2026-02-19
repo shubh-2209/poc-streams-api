@@ -16,27 +16,40 @@ const SUPPORTED_RESOLUTIONS: VideoResolution[] = ['360p', '480p', '720p', '1080p
 
 export default class VideosController {
 
-  async index({ auth, response }: HttpContext) {
+  async index({ auth, response ,request}: HttpContext) {
     // const user = await auth.authenticate()
-    const videos = await Video.query()
-      .where('user_id', 1)
-      .orderBy('created_at', 'desc')
-    
-    const formattedVideos = videos.map(video => ({
-      id: video.id,
-      title: video.title,
-      status: video.status,
-      cloudinaryUrl: video.cloudinaryUrl,
-      cloudinaryStreamingUrl: video.cloudinaryStreamingUrl,
-      cloudinaryPublicId: video.cloudinaryPublicId,
-      duration: video.duration,
-      resolution: video.resolution,
-      fileSize: video.fileSize,
-      extension: video.extension,
-      createdAt: video.createdAt,
-    }))
-    
-    return response.ok({ count: formattedVideos.length, videos: formattedVideos })
+    const queryData = request.qs();
+ 
+    const serviceVideo = new VideoService()
+     
+    const result   = await serviceVideo.getAllData(queryData)
+ 
+    if(!result){
+      return response.status(404).json({
+        success:false,
+        message:"No data found"
+      })
+    }
+ 
+    // const videos = await Video.query()
+    //   .where('user_id', 1)
+    //   .orderBy('created_at', 'desc')
+   
+    // const formattedVideos = videos.map(video => ({
+    //   id: video.id,
+    //   title: video.title,
+    //   status: video.status,
+    //   cloudinaryUrl: video.cloudinaryUrl,
+    //   cloudinaryStreamingUrl: video.cloudinaryStreamingUrl,
+    //   cloudinaryPublicId: video.cloudinaryPublicId,
+    //   duration: video.duration,
+    //   resolution: video.resolution,
+    //   fileSize: video.fileSize,
+    //   extension: video.extension,
+    //   createdAt: video.createdAt,
+    // }))
+   
+    return response.ok({ count: result.length, videos: result })
   }
 
   async show({ params, auth, response }: HttpContext) {
@@ -122,6 +135,7 @@ async upload({ request, auth, response }: HttpContext) {
     extension: ext,
     uploadTime: DateTime.now(),
     uploadDuration,
+    type:'reel'
   })
 
   try {

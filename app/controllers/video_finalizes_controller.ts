@@ -84,7 +84,8 @@ export default class VideoFinalizeController {
         uploadDuration: result.uploaded.duration,
         cloudinaryPublicId: result.uploaded.public_id,
         cloudinaryUrl: result.uploaded.secure_url,
-        cloudinaryStreamingUrl:result.uploaded.playback_url
+        cloudinaryStreamingUrl:result.uploaded.playback_url,
+        type:'video'
       })
 
       return response.json({

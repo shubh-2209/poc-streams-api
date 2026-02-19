@@ -36,6 +36,9 @@ export default class Video extends BaseModel {
   declare cleanAudioPath: string | null
 
   @column()
+  declare type: 'reel' | 'video'
+
+  @column()
   declare thumbnailPath: string | null
 
   @column()
