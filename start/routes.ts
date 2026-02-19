@@ -21,6 +21,14 @@ router.group(() => {
   router.post('/auth/logout', [AuthController, 'logout']).use(middleware.auth())
 }).prefix('/api')
 
+router.group(() => {
+
+  router.post('/upload', [VideoThumbnailController, 'uploadVideo'])
+  router.get('/videos', [VideoThumbnailController, 'getVideos'])
+  router.get('/videos/:id/thumbnails', [VideoThumbnailController, 'getThumbnails'])
+
+}).prefix('/api/v1') 
+
 // ══════════════════════════════════════════════════════════════
 // PROTECTED ROUTES (Bearer token required)
 // ══════════════════════════════════════════════════════════════
