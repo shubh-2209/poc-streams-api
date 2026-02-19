@@ -5,6 +5,7 @@ import { execSync, exec } from 'child_process'
 import { promisify } from 'util'
 import { v2 as cloudinary } from 'cloudinary'
 import Video from '#models/video'
+import { DateTime } from 'luxon'
 
 const execAsync = promisify(exec)
 
@@ -20,7 +21,19 @@ interface UploadResult {
   success: boolean
   videoId?: number
   cloudinaryUrl?: string
+  cloudinaryStreamingUrl?: string  
+  cloudinaryPublicId?: string      
   error?: string
+}
+
+interface CloudinaryResult {
+  success: boolean
+  cloudinaryUrl?: string
+  cloudinaryStreamingUrl?: string
+  cloudinaryPublicId?: string
+  duration?: number
+  width?: number
+  height?: number
 }
 
 export default class LiveStreamService {
@@ -28,7 +41,7 @@ export default class LiveStreamService {
 
   static configure() {
     cloudinary.config({
-      cloud_name: process.env.CLOUDINARY_NAME,
+      cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
       api_key: process.env.CLOUDINARY_API_KEY,
       api_secret: process.env.CLOUDINARY_API_SECRET,
     })
@@ -66,6 +79,10 @@ export default class LiveStreamService {
     return true
   }
 
+  getSession(sessionId: string): StreamSession | undefined {
+    return LiveStreamService.activeSessions.get(sessionId)
+  }
+
   async endStream(sessionId: string): Promise<UploadResult> {
     const session = LiveStreamService.activeSessions.get(sessionId)
 
@@ -86,7 +103,6 @@ export default class LiveStreamService {
         return { success: false, error: 'No video data recorded' }
       }
 
-      // 1. Combine all chunks into one WebM file
       const blob = new Blob(session.recordedChunks, { type: 'video/webm' })
       const buffer = Buffer.from(await blob.arrayBuffer())
 
@@ -99,9 +115,7 @@ export default class LiveStreamService {
       await fs.writeFile(webmPath, buffer)
       console.log(`\x1b[34m💾 WebM saved:\x1b[0m ${this.formatBytes(buffer.length)}`)
 
-      // 2. Convert WebM → MP4 using FFmpeg (required for Cloudinary)
       const ffmpegAvailable = await this.checkFfmpeg()
-
       let uploadPath = webmPath
 
       if (ffmpegAvailable) {
@@ -113,18 +127,16 @@ export default class LiveStreamService {
           uploadPath = mp4Path
           console.log('\x1b[32m✅ FFmpeg conversion successful!\x1b[0m')
         } catch (ffmpegErr) {
-          console.error('\x1b[33m⚠️ FFmpeg conversion failed, trying direct WebM upload:\x1b[0m', ffmpegErr)
+          console.error('\x1b[33m⚠️ FFmpeg failed, uploading raw WebM:\x1b[0m', ffmpegErr)
           uploadPath = webmPath
         }
       } else {
-        console.log('\x1b[33m⚠️ FFmpeg not found, uploading raw WebM (may fail on Cloudinary)\x1b[0m')
+        console.log('\x1b[33m⚠️ FFmpeg not found, uploading raw WebM\x1b[0m')
       }
 
-      // 3. Upload to Cloudinary
       console.log('\x1b[36m☁️ Uploading to Cloudinary...\x1b[0m')
       const cloudinaryResult = await this.uploadToCloudinary(uploadPath, session.userId, session.title)
 
-      // Cleanup temp files
       await fs.unlink(webmPath).catch(() => {})
       await fs.unlink(mp4Path).catch(() => {})
 
@@ -133,27 +145,47 @@ export default class LiveStreamService {
         return { success: false, error: 'Cloudinary upload failed' }
       }
 
-      // 4. Save to database
       console.log('\x1b[36m💾 Saving to database...\x1b[0m')
+      console.log('Cloudinary result:', cloudinaryResult)
+
       const videoRecord = await Video.create({
-        userId: session.userId,
-        title: session.title,
+        userId:    session.userId,
+        title:     session.title,
         originalFilename: `stream_${sessionId}.mp4`,
-        storagePath: cloudinaryResult.cloudinaryUrl!,
+
+        storagePath: null,
+
         extension: 'mp4',
-        mimeType: 'video/mp4',
-        fileSize: buffer.length,
-        status: 'ready',
+        mimeType:  'video/mp4',
+        fileSize:  buffer.length,
+        status:    'uploaded',
+        uploadTime: DateTime.now(),
+
+        cloudinaryUrl:          cloudinaryResult.cloudinaryUrl ?? null,
+        cloudinaryStreamingUrl: cloudinaryResult.cloudinaryStreamingUrl ?? null,
+        cloudinaryPublicId:     cloudinaryResult.cloudinaryPublicId ?? null,
+
+        duration:   cloudinaryResult.duration   ? Math.round(cloudinaryResult.duration) : null,
+        resolution: cloudinaryResult.width && cloudinaryResult.height
+          ? `${cloudinaryResult.width}x${cloudinaryResult.height}`
+          : null,
       })
 
       console.log('\x1b[32m✅ Video saved! ID:\x1b[0m', videoRecord.id)
+      console.log('\x1b[32m✅ cloudinaryUrl:\x1b[0m', videoRecord.cloudinaryUrl)
+      console.log('\x1b[32m✅ cloudinaryStreamingUrl:\x1b[0m', videoRecord.cloudinaryStreamingUrl)
+      console.log('\x1b[32m✅ cloudinaryPublicId:\x1b[0m', videoRecord.cloudinaryPublicId)
+
       LiveStreamService.activeSessions.delete(sessionId)
 
       return {
         success: true,
         videoId: videoRecord.id,
-        cloudinaryUrl: cloudinaryResult.cloudinaryUrl,
+        cloudinaryUrl:          videoRecord.cloudinaryUrl ?? undefined,
+        cloudinaryStreamingUrl: videoRecord.cloudinaryStreamingUrl ?? undefined,
+        cloudinaryPublicId:     videoRecord.cloudinaryPublicId ?? undefined,
       }
+
     } catch (error) {
       console.error('\x1b[31m❌ endStream ERROR:\x1b[0m', error)
       await fs.unlink(webmPath).catch(() => {})
@@ -179,35 +211,62 @@ export default class LiveStreamService {
     filePath: string,
     userId: number,
     title: string
-  ): Promise<{ success: boolean; cloudinaryUrl?: string }> {
+  ): Promise<CloudinaryResult> {
     try {
-      if (!process.env.CLOUDINARY_NAME || !process.env.CLOUDINARY_API_KEY || !process.env.CLOUDINARY_API_SECRET) {
+      if (
+        !process.env.CLOUDINARY_CLOUD_NAME ||
+        !process.env.CLOUDINARY_API_KEY ||
+        !process.env.CLOUDINARY_API_SECRET
+      ) {
         throw new Error('Cloudinary environment variables not configured')
       }
 
       const isWebm = filePath.endsWith('.webm')
+      const publicId = `stream_${Date.now()}`
 
       const result = await cloudinary.uploader.upload(filePath, {
         resource_type: 'video',
-        folder: `live_streams/user_${userId}`,
-        public_id: `stream_${Date.now()}`,
-        display_name: title,
-        tags: ['live_stream', `user_${userId}`],
-        // If uploading webm directly, ask cloudinary to convert
+        folder:        `live_streams/user_${userId}`,
+        public_id:     publicId,
+        display_name:  title,
+        tags:          ['live_stream', `user_${userId}`],
         ...(isWebm && {
-          eager: [{ format: 'mp4', video_codec: 'h264' }],
+          eager:       [{ format: 'mp4', video_codec: 'h264' }],
           eager_async: false,
         }),
       })
 
-      // Use eager MP4 URL if webm was uploaded and converted
+      console.log('\x1b[32m✅ Cloudinary raw result:\x1b[0m', {
+        secure_url: result.secure_url,
+        public_id:  result.public_id,
+        duration:   result.duration,
+        width:      result.width,
+        height:     result.height,
+      })
+
       let finalUrl = result.secure_url
       if (isWebm && result.eager && result.eager[0]?.secure_url) {
         finalUrl = result.eager[0].secure_url
       }
 
+      const streamingUrl = finalUrl
+        .replace('/upload/', '/upload/sp_auto/')
+        .replace(/\.(mp4|mov|avi|mkv|webm|flv|wmv)$/i, '.m3u8')
+
       console.log('\x1b[32m✅ Cloudinary URL:\x1b[0m', finalUrl)
-      return { success: true, cloudinaryUrl: finalUrl }
+      console.log('\x1b[32m✅ Streaming URL:\x1b[0m', streamingUrl)
+      console.log('\x1b[32m✅ Public ID:\x1b[0m', result.public_id)
+
+      return {
+        success:               true,
+        cloudinaryUrl:         finalUrl,
+        cloudinaryStreamingUrl: streamingUrl,
+        cloudinaryPublicId:    result.public_id,   
+        duration:              result.duration,
+        width:                 result.width,
+        height:                result.height,
+      }
+
     } catch (error) {
       console.error('\x1b[31m❌ Cloudinary ERROR:\x1b[0m', error instanceof Error ? error.message : error)
       return { success: false }
@@ -215,9 +274,7 @@ export default class LiveStreamService {
   }
 
   cancelSession(sessionId: string): boolean {
-    if (!LiveStreamService.activeSessions.has(sessionId)) {
-      return false 
-    }
+    if (!LiveStreamService.activeSessions.has(sessionId)) return false
     LiveStreamService.activeSessions.delete(sessionId)
     console.log('\x1b[33m🗑️ Session CANCELLED:\x1b[0m', sessionId)
     return true
