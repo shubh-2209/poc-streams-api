@@ -6,6 +6,7 @@ import http from 'http'
 import app from '@adonisjs/core/services/app'
 import { v2 as cloudinary } from 'cloudinary'
 import ffmpeg from 'fluent-ffmpeg'
+import { tmpdir } from 'os'
 
 export default class VideoFinalizeService {
 
@@ -62,7 +63,9 @@ export default class VideoFinalizeService {
         processingStatus: 'completed',
         duration: finalDuration,
         appliedFilters: filters,
-        processingTime
+        processingTime,
+        uploaded,
+        storagePath:tmpdir
       }
 
     } catch (error: any) {
