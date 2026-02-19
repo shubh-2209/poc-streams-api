@@ -11,7 +11,12 @@ const corsConfig = defineConfig({
   origin: true,
   methods: ['GET', 'HEAD', 'POST', 'PUT', 'DELETE'],
   headers: true,
-  exposeHeaders: [],
+  exposeHeaders: [
+    'X-File-Extension',
+    'X-Original-Filename', 
+    'Content-Disposition',
+    'Content-Type',
+  ],
   credentials: true,
   maxAge: 90,
 })

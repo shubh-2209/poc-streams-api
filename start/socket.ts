@@ -24,10 +24,10 @@ app.ready(async () => {
 
   io = new Server(httpServer, {
     cors: {
-      origin: '*',
+      origin: true,
       methods: ['GET', 'POST'],
       allowedHeaders: ['ngrok-skip-browser-warning'],
-      credentials: false,
+      credentials: true,
     },
     transports: ['polling', 'websocket'],
     allowUpgrades: true,
