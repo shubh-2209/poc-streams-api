@@ -220,6 +220,7 @@ export default class VideoService {
     await this.ensureDirs()
 
     const video = await Video.findOrFail(videoId)
+
     const ext     = video.extension ?? 'mp4'
     const rawTemp = path.join(this.tempDir(), `${cuid()}.${ext}`)
 

@@ -512,10 +512,12 @@ async upload({ request, auth, response }: HttpContext) {
         Number(params.id)
       )
       tempPath = tp
+      const extension = fileName.split('.').pop() || 'mp4'
 
       response.header('Content-Type', mimeType)
       response.header('Content-Disposition', `attachment; filename="${fileName}"`)
-
+      response.header('X-File-Extension', extension)  // ← Custom header for extension
+      response.header('X-Original-Filename', fileName)
       await response.download(tempPath)
 
     } catch (error) {
