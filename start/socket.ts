@@ -1,6 +1,7 @@
 import { Server } from 'socket.io'
 import app from '@adonisjs/core/services/app'
 import server from '@adonisjs/core/services/server'
+import LiveChat from '#models/live_chat'
 
 interface ViewerInfo {
   socketId: string
@@ -49,24 +50,24 @@ app.ready(async () => {
 
       const stream: LiveStream = {
         sessionId,
-        broadcasterId:   socket.id,
+        broadcasterId: socket.id,
         broadcasterName: broadcasterName || 'Anonymous',
         title,
         startTime: new Date(),
-        viewers:   new Map(),
+        viewers: new Map(),
       }
 
       liveStreams.set(sessionId, stream)
       socket.join(sessionId)
       socket.data.sessionId = sessionId
-      socket.data.role      = 'broadcaster'
+      socket.data.role = 'broadcaster'
 
       io.emit('live-started', {
         sessionId,
         title,
-        broadcasterId:   socket.id,
+        broadcasterId: socket.id,
         broadcasterName: stream.broadcasterName,
-        startTime:       stream.startTime.toISOString(),
+        startTime: stream.startTime.toISOString(),
       })
     })
 
@@ -75,20 +76,20 @@ app.ready(async () => {
       const stream = liveStreams.get(sessionId)
       if (!stream) return socket.emit('error', 'Stream not found')
       if (socket.id === stream.broadcasterId) return
-
+      // This ensures live video + chat use same room
       socket.join(sessionId)
 
       stream.viewers.set(socket.id, {
         socketId: socket.id,
-        name:     viewerName || 'Anonymous',
+        name: viewerName || 'Anonymous',
       })
 
       socket.data.sessionId = sessionId
-      socket.data.role      = 'viewer'
+      socket.data.role = 'viewer'
 
       // Broadcaster ko viewer ka naam bhejo
       io.to(stream.broadcasterId).emit('viewer-joined', {
-        viewerId:   socket.id,
+        viewerId: socket.id,
         viewerName: viewerName || 'Anonymous',
         sessionId,
       })
@@ -101,10 +102,10 @@ app.ready(async () => {
 
       // Updated viewer list sirf broadcaster ko
       io.to(stream.broadcasterId).emit('viewer-list', {
-        viewers: Array.from(stream.viewers.values()).map(v => ({
-          id:   v.socketId,
+        viewers: Array.from(stream.viewers.values()).map((v) => ({
+          id: v.socketId,
           name: v.name,
-        }))
+        })),
       })
     })
 
@@ -127,24 +128,28 @@ app.ready(async () => {
 
         // Broadcaster ko viewer left batao
         io.to(stream.broadcasterId).emit('viewer-left', {
-          viewerId:   socket.id,
+          viewerId: socket.id,
           viewerName: viewerInfo?.name,
           sessionId,
         })
 
         // Updated viewer list broadcaster ko
         io.to(stream.broadcasterId).emit('viewer-list', {
-          viewers: Array.from(stream.viewers.values()).map(v => ({
-            id:   v.socketId,
+          viewers: Array.from(stream.viewers.values()).map((v) => ({
+            id: v.socketId,
             name: v.name,
-          }))
+          })),
         })
 
-        console.log(`👋 Viewer left: ${viewerInfo?.name} | Session: ${sessionId} | Remaining: ${stream.viewers.size}`)
+        console.log(
+          `👋 Viewer left: ${viewerInfo?.name} | Session: ${sessionId} | Remaining: ${stream.viewers.size}`
+        )
       }
     })
 
-    // ─── STOP LIVE ────────────────────────────────────────
+    // ─────────────────────────────────────────
+    // STOP LIVE
+    // ─────────────────────────────────────────
     socket.on('stop-live', ({ sessionId }) => {
       const stream = liveStreams.get(sessionId)
       if (!stream || socket.id !== stream.broadcasterId) return
@@ -152,27 +157,55 @@ app.ready(async () => {
       io.to(sessionId).emit('live-stopped', {
         sessionId,
         endTime: new Date().toISOString(),
-        reason:  'stopped-by-broadcaster',
+        reason: 'stopped-by-broadcaster',
       })
 
       liveStreams.delete(sessionId)
-      console.log(`🔴 Stream stopped: ${sessionId}`)
     })
 
-    // ─── DISCONNECT ───────────────────────────────────────
-    socket.on('disconnect', () => {
-      console.log('User disconnected:', socket.id)
+    socket.on('send-message', async ({ sessionId, message }) => {
+      const stream = liveStreams.get(sessionId)
+      if (!stream) return socket.emit('error', 'Stream is not active')
 
+      if (!message) return
+
+      let username = 'Anonymous'
+
+      if (socket.data.role === 'broadcaster') {
+        username = stream.broadcasterName
+      } else if (socket.data.role === 'viewer') {
+        const viewer = stream.viewers.get(socket.id)
+        username = viewer?.name || 'Anonymous'
+      }
+
+      const chat = await LiveChat.create({
+        sessionId,
+        videoId: null,
+        username,
+        message,
+      })
+
+      io.to(sessionId).emit('new-message', {
+        id: chat.id,
+        username,
+        message,
+        createdAt: chat.createdAt,
+      })
+    })
+
+    // ─────────────────────────────────────────
+    // DISCONNECT
+    // ─────────────────────────────────────────
+    socket.on('disconnect', () => {
       for (const [sessionId, stream] of liveStreams.entries()) {
         if (stream.broadcasterId === socket.id) {
           io.to(sessionId).emit('live-stopped', {
             sessionId,
-            reason:  'broadcaster-disconnected',
+            reason: 'broadcaster-disconnected',
             endTime: new Date().toISOString(),
           })
           liveStreams.delete(sessionId)
           console.log(`Stream auto-ended: ${sessionId}`)
-
         } else if (stream.viewers.has(socket.id)) {
           const viewerInfo = stream.viewers.get(socket.id)
           stream.viewers.delete(socket.id)
@@ -184,16 +217,16 @@ app.ready(async () => {
           })
 
           io.to(stream.broadcasterId).emit('viewer-left', {
-            viewerId:   socket.id,
+            viewerId: socket.id,
             viewerName: viewerInfo?.name,
             sessionId,
           })
 
           io.to(stream.broadcasterId).emit('viewer-list', {
-            viewers: Array.from(stream.viewers.values()).map(v => ({
-              id:   v.socketId,
+            viewers: Array.from(stream.viewers.values()).map((v) => ({
+              id: v.socketId,
               name: v.name,
-            }))
+            })),
           })
         }
       }
@@ -203,12 +236,12 @@ app.ready(async () => {
     socket.on('get-available-streams', (callback) => {
       if (typeof callback !== 'function') return
       const streams = Array.from(liveStreams.values()).map((s) => ({
-        sessionId:       s.sessionId,
-        broadcasterId:   s.broadcasterId,
+        sessionId: s.sessionId,
+        broadcasterId: s.broadcasterId,
         broadcasterName: s.broadcasterName,
-        title:           s.title,
-        startTime:       s.startTime.toISOString(),
-        viewersCount:    s.viewers.size,
+        title: s.title,
+        startTime: s.startTime.toISOString(),
+        viewersCount: s.viewers.size,
       }))
       callback(streams)
     })

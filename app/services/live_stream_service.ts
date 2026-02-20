@@ -6,7 +6,7 @@ import { promisify } from 'util'
 import { v2 as cloudinary } from 'cloudinary'
 import Video from '#models/video'
 import { DateTime } from 'luxon'
-
+import LiveChat from '#models/live_chat'
 const execAsync = promisify(exec)
 
 interface StreamSession {
@@ -22,8 +22,8 @@ interface UploadResult {
   success: boolean
   videoId?: number
   cloudinaryUrl?: string
-  cloudinaryStreamingUrl?: string  
-  cloudinaryPublicId?: string      
+  cloudinaryStreamingUrl?: string
+  cloudinaryPublicId?: string
   error?: string
 }
 
@@ -75,7 +75,9 @@ export default class LiveStreamService {
     }
 
     session.recordedChunks.push(chunk)
-    console.log(`\x1b[33m📦 Chunk ADDED:\x1b[0m ${sessionId} | Total: ${session.recordedChunks.length}`)
+    console.log(
+      `\x1b[33m📦 Chunk ADDED:\x1b[0m ${sessionId} | Total: ${session.recordedChunks.length}`
+    )
     return true
   }
 
@@ -96,7 +98,9 @@ export default class LiveStreamService {
     const mp4Path = path.join(tmpDir, `stream_${sessionId}.mp4`)
 
     try {
-      console.log(`\x1b[34m🎬 Processing stream:\x1b[0m ${sessionId} | Chunks: ${session.recordedChunks.length}`)
+      console.log(
+        `\x1b[34m🎬 Processing stream:\x1b[0m ${sessionId} | Chunks: ${session.recordedChunks.length}`
+      )
 
       if (session.recordedChunks.length === 0) {
         LiveStreamService.activeSessions.delete(sessionId)
@@ -135,7 +139,11 @@ export default class LiveStreamService {
       }
 
       console.log('\x1b[36m☁️ Uploading to Cloudinary...\x1b[0m')
-      const cloudinaryResult = await this.uploadToCloudinary(uploadPath, session.userId, session.title)
+      const cloudinaryResult = await this.uploadToCloudinary(
+        uploadPath,
+        session.userId,
+        session.title
+      )
 
       await fs.unlink(webmPath).catch(() => {})
       await fs.unlink(mp4Path).catch(() => {})
@@ -149,21 +157,21 @@ export default class LiveStreamService {
       console.log('Cloudinary result:', cloudinaryResult)
 
       const videoRecord = await Video.create({
-        userId:    session.userId,
-        title:     session.title,
+        userId: session.userId,
+        title: session.title,
         originalFilename: `stream_${sessionId}.mp4`,
 
         storagePath: null,
 
         extension: 'mp4',
-        mimeType:  'video/mp4',
-        fileSize:  buffer.length,
-        status:    'uploaded',
+        mimeType: 'video/mp4',
+        fileSize: buffer.length,
+        status: 'uploaded',
         uploadTime: DateTime.now(),
 
-        cloudinaryUrl:          cloudinaryResult.cloudinaryUrl ?? null,
+        cloudinaryUrl: cloudinaryResult.cloudinaryUrl ?? null,
         cloudinaryStreamingUrl: cloudinaryResult.cloudinaryStreamingUrl ?? null,
-        cloudinaryPublicId:     cloudinaryResult.cloudinaryPublicId ?? null,
+        cloudinaryPublicId: cloudinaryResult.cloudinaryPublicId ?? null,
 
         duration:   cloudinaryResult.duration   ? Math.round(cloudinaryResult.duration) : null,
         resolution: cloudinaryResult.width && cloudinaryResult.height
@@ -171,7 +179,11 @@ export default class LiveStreamService {
           : null,
         type:"video"
       })
-
+      //  await LiveChat.query().where('session_id', sessionId).update({ videoId: videoRecord.id })
+      if (videoRecord?.id) {
+        await LiveChat.query().where('session_id', sessionId).update({ videoId: videoRecord.id })
+      }
+      console.log('✅ Chats linked to video ID:', videoRecord.id)
       console.log('\x1b[32m✅ Video saved! ID:\x1b[0m', videoRecord.id)
       console.log('\x1b[32m✅ cloudinaryUrl:\x1b[0m', videoRecord.cloudinaryUrl)
       console.log('\x1b[32m✅ cloudinaryStreamingUrl:\x1b[0m', videoRecord.cloudinaryStreamingUrl)
@@ -182,11 +194,10 @@ export default class LiveStreamService {
       return {
         success: true,
         videoId: videoRecord.id,
-        cloudinaryUrl:          videoRecord.cloudinaryUrl ?? undefined,
+        cloudinaryUrl: videoRecord.cloudinaryUrl ?? undefined,
         cloudinaryStreamingUrl: videoRecord.cloudinaryStreamingUrl ?? undefined,
-        cloudinaryPublicId:     videoRecord.cloudinaryPublicId ?? undefined,
+        cloudinaryPublicId: videoRecord.cloudinaryPublicId ?? undefined,
       }
-
     } catch (error) {
       console.error('\x1b[31m❌ endStream ERROR:\x1b[0m', error)
       await fs.unlink(webmPath).catch(() => {})
@@ -227,22 +238,22 @@ export default class LiveStreamService {
 
       const result = await cloudinary.uploader.upload(filePath, {
         resource_type: 'video',
-        folder:        `live_streams/user_${userId}`,
-        public_id:     publicId,
-        display_name:  title,
-        tags:          ['live_stream', `user_${userId}`],
+        folder: `live_streams/user_${userId}`,
+        public_id: publicId,
+        display_name: title,
+        tags: ['live_stream', `user_${userId}`],
         ...(isWebm && {
-          eager:       [{ format: 'mp4', video_codec: 'h264' }],
+          eager: [{ format: 'mp4', video_codec: 'h264' }],
           eager_async: false,
         }),
       })
 
       console.log('\x1b[32m✅ Cloudinary raw result:\x1b[0m', {
         secure_url: result.secure_url,
-        public_id:  result.public_id,
-        duration:   result.duration,
-        width:      result.width,
-        height:     result.height,
+        public_id: result.public_id,
+        duration: result.duration,
+        width: result.width,
+        height: result.height,
       })
 
       let finalUrl = result.secure_url
@@ -259,17 +270,19 @@ export default class LiveStreamService {
       console.log('\x1b[32m✅ Public ID:\x1b[0m', result.public_id)
 
       return {
-        success:               true,
-        cloudinaryUrl:         finalUrl,
+        success: true,
+        cloudinaryUrl: finalUrl,
         cloudinaryStreamingUrl: streamingUrl,
-        cloudinaryPublicId:    result.public_id,   
-        duration:              result.duration,
-        width:                 result.width,
-        height:                result.height,
+        cloudinaryPublicId: result.public_id,
+        duration: result.duration,
+        width: result.width,
+        height: result.height,
       }
-
     } catch (error) {
-      console.error('\x1b[31m❌ Cloudinary ERROR:\x1b[0m', error instanceof Error ? error.message : error)
+      console.error(
+        '\x1b[31m❌ Cloudinary ERROR:\x1b[0m',
+        error instanceof Error ? error.message : error
+      )
       return { success: false }
     }
   }

@@ -6,7 +6,7 @@ const VideosController = () => import('#controllers/videos_controller')
 const AudioController = () => import('#controllers/audio_controller')
 const VideoThumbnailController = () => import('#controllers/video_thumbnail_controller')
 const VideoFinalizeController = () => import('#controllers/video_finalizes_controller')
-
+const LiveChatsController = () => import('#controllers/live_chats_controller')
 
 // ══════════════════════════════════════════════════════════════
 // PUBLIC ROUTES
@@ -31,7 +31,7 @@ router.group(() => {
   router.get('/videos', [VideoThumbnailController, 'getVideos'])
   router.get('/videos/:id/thumbnails', [VideoThumbnailController, 'getThumbnails'])
 
-}).prefix('/api/v1') 
+}).prefix('/api/v1')
 
 // ══════════════════════════════════════════════════════════════
 // PROTECTED ROUTES (Bearer token required)
@@ -57,12 +57,12 @@ router.group(() => {
 
     // Convert an already-uploaded video (decompress → ffmpeg → compress)
     router.post('/convert', [VideosController, 'convert'])
-    
+
     router.post('/upload-video-convert',[VideosController,'uploadVideoConvert'])
-    
+
     // Download a video (decompress on-the-fly, stream to client)
     router.get('/:id/download', [VideosController, 'download'])
-    
+
   }).prefix('/videos')
 
 }).prefix('/api')
@@ -103,7 +103,7 @@ const LiveStreamsController = () => import('#controllers/live_streams_controller
  * Finalize video processing
  * Apply filters and trim, then upload to Cloudinary
  * POST /api/v1/videos/finalize
- * 
+ *
  * Body (JSON):
  * {
  *   videoUrl: string,        // Cloudinary video URL
@@ -123,7 +123,7 @@ const LiveStreamsController = () => import('#controllers/live_streams_controller
  *   },
  *   videoId?: string         // Optional
  * }
- * 
+ *
  * Response:
  * {
  *   success: true,
@@ -143,7 +143,7 @@ router.post('/api/v1/videos/finalize', [VideoFinalizeController, 'finalizeVideo'
 /**
  * Get video processing status
  * GET /api/v1/videos/:videoId/status
- * 
+ *
  * Response:
  * {
  *   success: true,
@@ -160,7 +160,7 @@ router.get('/api/v1/videos/:videoId/status', [VideoFinalizeController, 'getProce
 /**
  * Cancel video processing
  * DELETE /api/v1/videos/:videoId/cancel
- * 
+ *
  * Response:
  * {
  *   success: true,
@@ -172,3 +172,20 @@ router.get('/api/v1/videos/:videoId/status', [VideoFinalizeController, 'getProce
  * }
  */
 router.delete('/api/v1/videos/:videoId/cancel', [VideoFinalizeController, 'cancelProcessing'])
+
+// ══════════════════════════════════════════════════════════════
+// LIVE CHAT ROUTES (Persistent Chat)
+// ══════════════════════════════════════════════════════════════
+
+router
+  .group(() => {
+    // Get chat messages by session (during live)
+    router.get('/session/:sessionId', [LiveChatsController, 'getBySession'])
+
+    // Get chat messages by video (after stream saved)
+     router.get('/video/:videoId', [LiveChatsController, 'getByVideo'])
+  })
+  .prefix('/api/v1/live-chats')
+
+
+
