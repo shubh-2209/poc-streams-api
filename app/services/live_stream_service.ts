@@ -169,6 +169,7 @@ export default class LiveStreamService {
         resolution: cloudinaryResult.width && cloudinaryResult.height
           ? `${cloudinaryResult.width}x${cloudinaryResult.height}`
           : null,
+        type:"video"
       })
 
       console.log('\x1b[32m✅ Video saved! ID:\x1b[0m', videoRecord.id)
