@@ -77,6 +77,9 @@ export default class Video extends BaseModel {
   @column()
   declare errorMessage: string | null
 
+  @column()
+  declare video_thumbnails:any
+
   @column.dateTime({ autoCreate: true })
   declare createdAt: DateTime
 
