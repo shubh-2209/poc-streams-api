@@ -15,6 +15,7 @@ interface StreamSession {
   recordedChunks: Blob[]
   startTime: Date
   title: string
+  broadcasterName: string
 }
 
 interface UploadResult {
@@ -51,20 +52,19 @@ export default class LiveStreamService {
     LiveStreamService.configure()
   }
 
-  createSession(userId: number, title: string): string {
-    const sessionId = this.generateSessionId()
-    const session: StreamSession = {
-      userId,
-      sessionId,
-      recordedChunks: [],
-      startTime: new Date(),
-      title,
-    }
-
-    LiveStreamService.activeSessions.set(sessionId, session)
-    console.log('\x1b[32m✅ Session CREATED:\x1b[0m', sessionId)
-    return sessionId
+  createSession(userId: number, title: string, broadcasterName: string): string {
+  const sessionId = this.generateSessionId()
+  const session: StreamSession = {
+    userId,
+    sessionId,
+    recordedChunks: [],
+    startTime: new Date(),
+    title,
+    broadcasterName,  // ✅
   }
+  LiveStreamService.activeSessions.set(sessionId, session)
+  return sessionId
+}
 
   addChunk(sessionId: string, chunk: Blob): boolean {
     const session = LiveStreamService.activeSessions.get(sessionId)
