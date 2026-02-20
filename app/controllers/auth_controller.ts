@@ -107,31 +107,25 @@ export default class AuthController {
     }
   }
 
+  
   async me({ auth, response }: HttpContext) {
-    try {
-      const user = await auth.authenticate()
-      
-      const userExists = await User.find(user.id)
-      if (!userExists) {
-        return response.notFound({
-          error: 'User not found',
-          message: 'User account no longer exists'
-        })
-      }
+  try {
+    const user = await auth.use('api').authenticate()
 
-      return response.ok({
-        user: {
-          id: user.id,
-          fullName: user.fullName,
-          email: user.email,
-          createdAt: user.createdAt,
-        },
-      })
-    } catch (error) {
-      return response.unauthorized({
-        error: 'Authentication failed',
-        message: 'Unable to fetch user details. Please login again.'
-      })
-    }
+    return response.ok({
+      user: {
+        id: user.id,
+        fullName: user.fullName,
+        email: user.email,
+        createdAt: user.createdAt,
+      },
+    })
+  } catch (error) {
+    console.log('Auth error:', error.message)
+    return response.unauthorized({
+      error: 'Authentication failed',
+      message: 'Invalid or expired token. Please login again.'
+    })
   }
+}
 }
