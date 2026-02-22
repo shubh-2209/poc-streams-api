@@ -110,9 +110,11 @@ export default class VideoService {
       videoQuery.where( 'type' , type)
     }
  
-    if(sortType){
-      videoQuery.orderBy('created_at',sortType)
-    }
+    // if(sortType){
+    //   videoQuery.orderBy('created_at',sortType)
+    // }
+    videoQuery.orderBy('created_at', sortType ?? 'desc')
+
  
     return await videoQuery;
   }

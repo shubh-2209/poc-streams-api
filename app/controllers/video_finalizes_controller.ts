@@ -6,51 +6,62 @@ import { DateTime } from 'luxon'
 
 export default class VideoFinalizeController {
 
-
   /**
    * Combined Single Endpoint: Upload + Process + Finalize
    * POST /api/v1/videos/finalize
    * 
-   * This endpoint handles:
-   * 1. Video upload to Cloudinary (if video file provided)
-   * 2. Sprite generation for thumbnails
-   * 3. Optional: Apply filters and trim
-   * 4. Save to database
+   * SSE (Server-Sent Events) version — real-time progress to frontend
    * 
-   * Can be called in two ways:
-   * - With just video file → Upload and generate sprites
-   * - With video file + filters + trimData → Upload, process, and finalize
+   * IMPORTANT: This streams progress events so frontend shows real status
    */
-   async finalizeVideo({ request, response }: HttpContext) {
-    try {
-      console.log('📨 Received finalize request')
+  async finalizeVideo({ request, response }: HttpContext) {
+    // ── SSE Headers ───────────────────────────────────────────────
+    response.response.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+      'Access-Control-Allow-Origin': '*',
+      'X-Accel-Buffering': 'no', // Nginx buffering disable (important!)
+    })
 
-      // ============ GET VIDEO FILE ============
+    // Helper: send SSE event
+    const send = (event: string, data: object) => {
+      response.response.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
+    }
+
+    try {
+      console.log('📨 Received finalize request (SSE mode)')
+
+      // ── Get Video File ────────────────────────────────────────
       const videoFile = request.file('video')
 
       if (!videoFile) {
-        return response.status(400).json({
-          success: false,
-          message: 'No video file provided',
-        })
+        send('error', { message: 'No video file provided' })
+        response.response.end()
+        return
       }
 
-      console.log('📤 Video file received:', {
-        name: videoFile.clientName,
-        size: videoFile.size,
-      })
+      console.log('📤 Video file received:', videoFile.clientName, videoFile.size, 'bytes')
 
-      // ============ STEP 1: UPLOAD & GENERATE SPRITES ============
-      console.log('🎬 Uploading video and generating sprites...')
+      // ── STEP 1: Upload + Sprite Generation (~30-60s for large files) ──
+      send('progress', { 
+        step: 'upload', 
+        percent: 5, 
+        message: 'Uploading video to cloud storage...' 
+      })
 
       const videoThumbnailService = new VideoThumbnailService()
       const uploadResult = await videoThumbnailService.processVideoUpload(videoFile)
 
-      console.log('✅ Original video uploaded')
-      console.log('   Video ID:', uploadResult.videoId)
-      console.log('   Duration:', uploadResult.duration)
+      console.log('✅ Original video uploaded, ID:', uploadResult.videoId)
 
-      // ============ STEP 2: GET FILTERS & TRIM ============
+      send('progress', { 
+        step: 'upload', 
+        percent: 40, 
+        message: 'Video uploaded! Preparing to process filters...' 
+      })
+
+      // ── STEP 2: Get Filters & Trim ────────────────────────────
       const filtersStr = request.input('filters')
       const trimDataStr = request.input('trimData')
 
@@ -62,77 +73,123 @@ export default class VideoFinalizeController {
         try {
           filters = JSON.parse(filtersStr)
           trimData = JSON.parse(trimDataStr)
-          console.log('✅ Parsed filters and trimData')
         } catch (parseError) {
-          return response.status(400).json({
-            success: false,
-            message: 'Invalid JSON in filters or trimData',
-          })
+          send('error', { message: 'Invalid JSON in filters or trimData' })
+          response.response.end()
+          return
         }
 
-        // ============ STEP 3: APPLY FILTERS & TRIM ============
-        console.log('🎬 Applying filters and trimming...')
+        // Check if any non-default filters were actually applied
+        const hasCustomFilters = (
+          filters.brightness !== 100 ||
+          filters.contrast !== 100 ||
+          filters.saturation !== 100 ||
+          filters.hue !== 0 ||
+          filters.blur > 0 ||
+          filters.sharpen !== 0 ||
+          filters.opacity !== 100
+        )
 
-        try {
-          const videoFinalizeService = new VideoFinalizeService()
-          finalizeResult = await videoFinalizeService.finalizeVideoProcessing(
-            uploadResult.videoUrl,
-            filters,
-            trimData,
-            uploadResult.videoId
-          )
+        // Check if trim is actually different from full video
+        const hasTrim = trimData.start > 0 || 
+          (trimData.end !== null && Math.abs(trimData.end - uploadResult.duration) > 1)
 
-          console.log('✅ Video finalized')
-          console.log('   Final URL:', finalizeResult.finalUrl.substring(0, 80) + '...')
-        } catch (finalizeError: any) {
-          console.error('❌ Finalization error:', finalizeError.message)
-          throw new Error(`Processing failed: ${finalizeError.message}`)
+        if (!hasCustomFilters && !hasTrim) {
+          // No processing needed — skip FFmpeg entirely!
+          console.log('⚡ No filters/trim needed, skipping FFmpeg processing')
+          send('progress', { 
+            step: 'skip', 
+            percent: 90, 
+            message: 'No filters applied, skipping processing...' 
+          })
+        } else {
+          // ── STEP 3: Apply Filters & Trim (FFmpeg) ──────────────
+          send('progress', { 
+            step: 'processing', 
+            percent: 50, 
+            message: 'Applying filters and trimming (this may take 1-3 minutes)...' 
+          })
+
+          console.log('🎬 Applying filters and trimming...')
+
+          try {
+            const videoFinalizeService = new VideoFinalizeService()
+
+            // Inject progress callback into service
+            finalizeResult = await videoFinalizeService.finalizeVideoProcessing(
+              uploadResult.videoUrl,
+              filters,
+              trimData,
+              uploadResult.videoId,
+              // Progress callback
+              (ffmpegPercent: number) => {
+                // FFmpeg goes 0→100 during processing
+                // Map it to 50→85 in our overall progress
+                const mapped = 50 + Math.floor(ffmpegPercent * 0.35)
+                send('progress', { 
+                  step: 'processing', 
+                  percent: mapped, 
+                  message: `Processing video: ${Math.round(ffmpegPercent)}%` 
+                })
+              }
+            )
+
+            console.log('✅ Video finalized')
+            send('progress', { 
+              step: 'uploading_result', 
+              percent: 88, 
+              message: 'Uploading processed video...' 
+            })
+          } catch (finalizeError: any) {
+            console.error('❌ Finalization error:', finalizeError.message)
+            send('error', { message: `Processing failed: ${finalizeError.message}` })
+            response.response.end()
+            return
+          }
         }
       }
 
-      // ============ STEP 4: SAVE TO DATABASE ============
-      console.log('💾 Saving to database...')
-
-      console.log('upload result',uploadResult)
+      // ── STEP 4: Save to Database ─────────────────────────────
+      send('progress', { 
+        step: 'saving', 
+        percent: 93, 
+        message: 'Saving to database...' 
+      })
 
       const finalUrl = finalizeResult?.finalUrl || uploadResult.videoUrl
       const videoId = finalizeResult?.videoId || uploadResult.videoId
       const extension = finalUrl.split('.').pop() || 'mp4'
-      const status = finalizeResult ? 'uploaded' : 'ready'
-      const trimmedDuration = finalizeResult
-        ? finalizeResult.duration
-        : uploadResult.duration
 
       const video = await Video.create({
-        userId: 1,  // ← TODO: Get from auth
+        userId: 1, // ← TODO: Get from auth
         title: uploadResult.fileName,
-        originalFilename: `${uploadResult.fileName}`,
+        originalFilename: uploadResult.fileName,
         storagePath: videoId,
         fileSize: finalizeResult?.uploaded?.bytes || 0,
         mimeType: `video/${extension}`,
-        status:'uploaded',  // ✅ Use 'ready' or 'uploaded'
+        status: 'uploaded',
         extension,
         uploadTime: DateTime.now(),
         uploadDuration: finalizeResult?.uploaded?.duration || uploadResult.duration,
         cloudinaryPublicId: videoId,
         cloudinaryUrl: finalUrl,
-        cloudinaryStreamingUrl:
-          finalizeResult?.uploaded?.playback_url || uploadResult.videoUrl,
+        cloudinaryStreamingUrl: finalizeResult?.uploaded?.playback_url || uploadResult.videoUrl,
         type: 'video',
-        video_thumbnails:uploadResult
+        video_thumbnails: uploadResult,
       })
 
       console.log('✅ Saved to database with ID:', video.id)
 
-      // ============ RETURN RESPONSE ============
-      const responseData = {
-        // upload: {
-        //   videoId: uploadResult.videoId,
-        //   videoUrl: uploadResult.videoUrl,
-        //   duration: uploadResult.duration,
-        //   sprites: uploadResult.thumbnailCount,
-        // },
-        upload : uploadResult
+      // ── STEP 5: Send Final Result ─────────────────────────────
+      send('progress', { step: 'done', percent: 100, message: 'Complete!' })
+
+      const responseData: any = {
+        upload: uploadResult,
+        database: {
+          id: video.id,
+          title: video.title,
+          status: video.status,
+        },
       }
 
       if (finalizeResult) {
@@ -144,53 +201,34 @@ export default class VideoFinalizeController {
         }
       }
 
-      responseData.database = {
-        id: video.id,
-        title: video.title,
-        status: video.status,
-      }
-
-      return response.json({
+      send('complete', {
         success: true,
         message: finalizeResult
           ? 'Video uploaded, processed, and saved'
           : 'Video uploaded and saved',
         data: responseData,
       })
+
     } catch (error: any) {
       console.error('❌ Error:', error.message)
-
-      return response.status(500).json({
-        success: false,
-        message: error.message || 'Video processing failed',
-      })
+      send('error', { message: error.message || 'Video processing failed' })
+    } finally {
+      response.response.end()
     }
   }
 
-  /**
-   * Get video status
-   * GET /api/v1/videos/:videoId
-   */
+  // ── Other endpoints unchanged ─────────────────────────────────
+
   async getVideoDetails({ request, response }: HttpContext) {
     try {
       const videoId = request.param('videoId')
-
       if (!videoId) {
-        return response.status(400).json({
-          success: false,
-          message: 'Video ID required',
-        })
+        return response.status(400).json({ success: false, message: 'Video ID required' })
       }
-
       const video = await Video.find(videoId)
-
       if (!video) {
-        return response.status(404).json({
-          success: false,
-          message: 'Video not found',
-        })
+        return response.status(404).json({ success: false, message: 'Video not found' })
       }
-
       return response.json({
         success: true,
         data: {
@@ -204,174 +242,38 @@ export default class VideoFinalizeController {
         },
       })
     } catch (error: any) {
-      return response.status(500).json({
-        success: false,
-        message: error.message,
-      })
+      return response.status(500).json({ success: false, message: error.message })
     }
   }
 
-  /**
-   * Finalize video with filters and trimming
-   * POST /api/v1/videos/finalize
-   */
-  // async finalizeVideo({ request, response }: HttpContext) {
-  //   try {
-  //     console.log('📨 Received finalize request')
-
-  //     // Get request data
-  //     const videoUrl = request.input('videoUrl')
-  //     const duration = request.input('duration')
-  //     const filtersStr = request.input('filters')
-  //     const trimDataStr = request.input('trimData')
-
-  //     console.log('Received inputs:', {
-  //       videoUrl: videoUrl?.substring(0, 50) + '...',
-  //       duration,
-  //       filtersStr: filtersStr?.substring(0, 50) + '...',
-  //       trimDataStr,
-  //     })
-
-  //     // ✅ Validate required fields
-  //     if (!videoUrl || !filtersStr || !trimDataStr) {
-  //       return response.status(400).json({
-  //         success: false,
-  //         message: 'Missing required fields: videoUrl, filters, trimData',
-  //       })
-  //     }
-
-  //     // ✅ Parse JSON strings
-  //     let filters, trimData
-  //     try {
-  //       filters = JSON.parse(filtersStr)
-  //       trimData = JSON.parse(trimDataStr)
-  //       console.log('✅ Parsed filters and trimData')
-  //     } catch (parseError) {
-  //       return response.status(400).json({
-  //         success: false,
-  //         message: 'Invalid JSON in filters or trimData',
-  //       })
-  //     }
-
-  //     console.log('✅ Request validation passed')
-
-  //     // ✅ FIX: Create service instance before calling method
-  //     const videoFinalizeService = new VideoFinalizeService()
-  //     console.log('✅ Service instance created')
-
-  //     // ✅ FIX: Call method on instance
-  //     console.log('🎬 Calling finalizeVideoProcessing...')
-  //     const result = await videoFinalizeService.finalizeVideoProcessing(
-  //       videoUrl,
-  //       filters,
-  //       trimData
-  //     )
-
-  //     console.log('✅ Finalization successful')
-  //     console.log('Result:', {
-  //       videoId: result.videoId,
-  //       duration: result.duration,
-  //       processingStatus: result.processingStatus,
-  //     })
-      
-  //     const extension = result.finalUrl.split('.').pop();
-  //     const lastPart = result.videoId.split('/').pop();
-  //     const originalName = `${lastPart}.${extension}`
-
-  //     const video = await Video.create({
-  //       userId: 1,
-  //       title: lastPart,
-  //       originalFilename: originalName || 'unknown',
-  //       storagePath: result.uploaded.public_id, // ✅ FIXED
-  //       fileSize: result.uploaded.bytes,
-  //       mimeType: `video/${result.uploaded.format}`,
-  //       status: 'uploaded',
-  //       extension: result.uploaded.format,
-  //       uploadTime: DateTime.now(),
-  //       uploadDuration: result.uploaded.duration,
-  //       cloudinaryPublicId: result.uploaded.public_id,
-  //       cloudinaryUrl: result.uploaded.secure_url,
-  //       cloudinaryStreamingUrl:result.uploaded.playback_url,
-  //       type:'video'
-  //     })
-
-  //     return response.json({
-  //       success: true,
-  //       message: 'Video processed successfully',
-  //       data: result,
-  //     })
-  //   } catch (error: any) {
-  //     console.error('❌ Finalization error:', error.message)
-  //     console.error('❌ Error type:', error.constructor.name)
-  //     console.error('❌ Stack:', error.stack?.substring(0, 500))
-
-  //     return response.status(500).json({
-  //       success: false,
-  //       message: error.message || 'Video processing failed',
-  //     })
-  //   }
-  // }
-
-  /**
-   * Get video processing status
-   * GET /api/v1/videos/:videoId/status
-   */
   async getProcessingStatus({ request, response }: HttpContext) {
     try {
       const videoId = request.param('videoId')
-
       if (!videoId) {
-        return response.status(400).json({
-          success: false,
-          message: 'videoId is required',
-        })
+        return response.status(400).json({ success: false, message: 'videoId is required' })
       }
-
       return response.json({
         success: true,
-        data: {
-          videoId,
-          status: 'completed',
-          progress: 100,
-          message: 'Video processing completed',
-        },
+        data: { videoId, status: 'completed', progress: 100, message: 'Video processing completed' },
       })
     } catch (error: any) {
-      return response.status(500).json({
-        success: false,
-        message: error.message,
-      })
+      return response.status(500).json({ success: false, message: error.message })
     }
   }
 
-  /**
-   * Cancel video processing
-   * DELETE /api/v1/videos/:videoId/cancel
-   */
   async cancelProcessing({ request, response }: HttpContext) {
     try {
       const videoId = request.param('videoId')
-
       if (!videoId) {
-        return response.status(400).json({
-          success: false,
-          message: 'videoId is required',
-        })
+        return response.status(400).json({ success: false, message: 'videoId is required' })
       }
-
       return response.json({
         success: true,
         message: 'Processing cancelled successfully',
-        data: {
-          videoId,
-          cancelledAt: new Date().toISOString(),
-        },
+        data: { videoId, cancelledAt: new Date().toISOString() },
       })
     } catch (error: any) {
-      return response.status(500).json({
-        success: false,
-        message: error.message,
-      })
+      return response.status(500).json({ success: false, message: error.message })
     }
   }
 }
