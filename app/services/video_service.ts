@@ -99,7 +99,7 @@ export default class VideoService {
  
     const { type ,userId,sortType} = payload;
  
-    let videoQuery = Video.query();
+    let videoQuery = Video.query().orderBy('created_at','desc');
  
  
     if(userId){

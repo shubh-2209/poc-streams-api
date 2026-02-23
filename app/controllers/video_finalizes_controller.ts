@@ -3,167 +3,181 @@ import VideoFinalizeService from '#services/video_finalize_service'
 import VideoThumbnailService from '#services/video_thumbnail_service'
 import Video from '#models/video'
 import { DateTime } from 'luxon'
+import VideoTempManager from '#services/video_temp_manager_service'
+import VideoProcessorService from '#services/video_processor_service'
+import { uploadSprite, uploadVideoToCloudinary } from '#services/cloudinary_service'
+import { Database } from '@adonisjs/lucid/database'
+import { title } from 'process'
+import SpriteService from '#services/sprite_service'
+
+function formatTime(seconds: number) {
+  const h = Math.floor(seconds / 3600)
+  const m = Math.floor((seconds % 3600) / 60)
+  const s = Math.floor(seconds % 60)
+
+  if (h > 0) return `${h}:${m.toString().padStart(2,'0')}:${s.toString().padStart(2,'0')}`
+  return `${m}:${s.toString().padStart(2,'0')}`
+}
+
+function buildThumbnails(frameCount: number, interval: number) {
+  return Array.from({ length: frameCount }, (_, i) => {
+    const timeSecond = Number((i * interval).toFixed(2))
+
+    return {
+      frameNo: i + 1,
+      timeSecond,
+      timeLabel: formatTime(timeSecond)
+    }
+  })
+}
+
+function calculateFrameCount(duration: number) {
+  let frameCount: number
+  let interval: number
+
+  if (duration < 60) {
+    frameCount = Math.ceil(duration/2)
+    interval = 2
+  } else if (duration < 600) {
+    frameCount = Math.ceil(duration / 2)
+    interval = 2
+  } else if (duration < 3600) {
+    frameCount = Math.ceil(duration / 5)
+    interval = 5
+  } else if (duration < 7200) {
+    frameCount = Math.ceil(duration / 10)
+    interval = 10
+  } else {
+    frameCount = 500
+    interval = duration / 500
+  }
+
+  return { frameCount, interval }
+}
+
+function buildUploadResult({
+  uploadedVideo,
+  uploadedSprite,
+  processed,
+  originalFileName
+}) {
+
+  const { frameCount, interval } =  calculateFrameCount(processed.duration)
+
+  const thumbnails = buildThumbnails(frameCount, interval)
+
+  return {
+    videoId: uploadedVideo.public_id,
+    fileName: originalFileName,
+    videoUrl: uploadedVideo.secure_url,
+    posterUrl: '',
+    duration: processed.duration,
+    durationFormatted: formatTime(processed.duration),
+    thumbnailCount: frameCount,
+    interval,
+    intervalLabel:
+      interval === 1 ? '1 per second' : `every ${interval}s`,
+    sprite: {
+      path: uploadedSprite.url,
+      columns: processed.spriteMeta.columns,
+      rows: processed.spriteMeta.rows,
+      thumbWidth: processed.spriteMeta.thumbWidth,
+      thumbHeight: processed.spriteMeta.thumbHeight,
+      spriteWidth:
+        processed.spriteMeta.thumbWidth * processed.spriteMeta.columns,
+      spriteHeight:
+        processed.spriteMeta.thumbHeight * processed.spriteMeta.rows
+    },
+    thumbnails
+  }
+}
+
 
 export default class VideoFinalizeController {
 
+  async finalizeVideo({ request, response }: HttpContext) {
+    const videoFile = request.file('video')
+    if (!videoFile) {
+      return response.badRequest({ success: false, message: 'No video file' })
+    }
 
-  /**
-   * Combined Single Endpoint: Upload + Process + Finalize
-   * POST /api/v1/videos/finalize
-   * 
-   * This endpoint handles:
-   * 1. Video upload to Cloudinary (if video file provided)
-   * 2. Sprite generation for thumbnails
-   * 3. Optional: Apply filters and trim
-   * 4. Save to database
-   * 
-   * Can be called in two ways:
-   * - With just video file → Upload and generate sprites
-   * - With video file + filters + trimData → Upload, process, and finalize
-   */
-   async finalizeVideo({ request, response }: HttpContext) {
+    let filters = null
+    let trimData = null
+
     try {
-      console.log('📨 Received finalize request')
+      if (request.input('filters'))
+        filters = JSON.parse(request.input('filters'))
 
-      // ============ GET VIDEO FILE ============
-      const videoFile = request.file('video')
+      if (request.input('trimData'))
+        trimData = JSON.parse(request.input('trimData'))
+    } catch {
+      return response.badRequest({ success: false, message: 'Invalid JSON' })
+    }
 
-      if (!videoFile) {
-        return response.status(400).json({
-          success: false,
-          message: 'No video file provided',
-        })
-      }
+    const temp = await VideoTempManager.create()
+    const localVideoPath = await VideoTempManager.saveUploadedFile(videoFile, temp)
+    console.log('save upload video file done');
 
-      console.log('📤 Video file received:', {
-        name: videoFile.clientName,
-        size: videoFile.size,
+    try {
+      const processor = new VideoProcessorService()
+
+      const processed = await processor.process({
+        inputPath: localVideoPath,
+        tempDir: temp,
+        filters,
+        trimData
       })
 
-      // ============ STEP 1: UPLOAD & GENERATE SPRITES ============
-      console.log('🎬 Uploading video and generating sprites...')
+      console.log("process done")
 
-      const videoThumbnailService = new VideoThumbnailService()
-      const uploadResult = await videoThumbnailService.processVideoUpload(videoFile)
+      const uploadedVideo = await uploadVideoToCloudinary(processed.videoPath,"meri file")
+      const uploadedSprite = await uploadSprite(processed.spritePath)
 
-      console.log('✅ Original video uploaded')
-      console.log('   Video ID:', uploadResult.videoId)
-      console.log('   Duration:', uploadResult.duration)
+      const uploadResult = buildUploadResult({
+        uploadedVideo,
+        uploadedSprite,
+        processed,
+        originalFileName: videoFile.clientName
+      })
 
-      // ============ STEP 2: GET FILTERS & TRIM ============
-      const filtersStr = request.input('filters')
-      const trimDataStr = request.input('trimData')
-
-      let filters = null
-      let trimData = null
-      let finalizeResult = null
-
-      if (filtersStr && trimDataStr) {
-        try {
-          filters = JSON.parse(filtersStr)
-          trimData = JSON.parse(trimDataStr)
-          console.log('✅ Parsed filters and trimData')
-        } catch (parseError) {
-          return response.status(400).json({
-            success: false,
-            message: 'Invalid JSON in filters or trimData',
-          })
-        }
-
-        // ============ STEP 3: APPLY FILTERS & TRIM ============
-        console.log('🎬 Applying filters and trimming...')
-
-        try {
-          const videoFinalizeService = new VideoFinalizeService()
-          finalizeResult = await videoFinalizeService.finalizeVideoProcessing(
-            uploadResult.videoUrl,
-            filters,
-            trimData,
-            uploadResult.videoId
-          )
-
-          console.log('✅ Video finalized')
-          console.log('   Final URL:', finalizeResult.finalUrl.substring(0, 80) + '...')
-        } catch (finalizeError: any) {
-          console.error('❌ Finalization error:', finalizeError.message)
-          throw new Error(`Processing failed: ${finalizeError.message}`)
-        }
-      }
-
-      // ============ STEP 4: SAVE TO DATABASE ============
-      console.log('💾 Saving to database...')
-
-      console.log('upload result',uploadResult)
-
-      const finalUrl = finalizeResult?.finalUrl || uploadResult.videoUrl
-      const videoId = finalizeResult?.videoId || uploadResult.videoId
-      const extension = finalUrl.split('.').pop() || 'mp4'
-      const status = finalizeResult ? 'uploaded' : 'ready'
-      const trimmedDuration = finalizeResult
-        ? finalizeResult.duration
-        : uploadResult.duration
+      const extension =
+        new URL(uploadedVideo.url).pathname.split('.').pop() || 'mp4'
 
       const video = await Video.create({
-        userId: 1,  // ← TODO: Get from auth
-        title: uploadResult.fileName,
-        originalFilename: `${uploadResult.fileName}`,
-        storagePath: videoId,
-        fileSize: finalizeResult?.uploaded?.bytes || 0,
+        userId: 1,
+        title: videoFile.clientName,
+        originalFilename: videoFile.clientName,
+        storagePath: uploadedVideo.publicId,
+        fileSize: uploadedVideo.bytes,
         mimeType: `video/${extension}`,
-        status:'uploaded',  // ✅ Use 'ready' or 'uploaded'
+        status: 'uploaded',
         extension,
         uploadTime: DateTime.now(),
-        uploadDuration: finalizeResult?.uploaded?.duration || uploadResult.duration,
-        cloudinaryPublicId: videoId,
-        cloudinaryUrl: finalUrl,
-        cloudinaryStreamingUrl:
-          finalizeResult?.uploaded?.playback_url || uploadResult.videoUrl,
+        uploadDuration: processed.duration,
+        cloudinaryPublicId: uploadedVideo.publicId,
+        cloudinaryUrl: uploadedVideo.url,
+        cloudinaryStreamingUrl: uploadedVideo.url,
         type: 'video',
-        video_thumbnails:uploadResult
+        video_thumbnails: uploadResult
       })
 
-      console.log('✅ Saved to database with ID:', video.id)
-
-      // ============ RETURN RESPONSE ============
-      const responseData = {
-        // upload: {
-        //   videoId: uploadResult.videoId,
-        //   videoUrl: uploadResult.videoUrl,
-        //   duration: uploadResult.duration,
-        //   sprites: uploadResult.thumbnailCount,
-        // },
-        upload : uploadResult
-      }
-
-      if (finalizeResult) {
-        responseData.finalized = {
-          videoId: finalizeResult.videoId,
-          finalUrl: finalizeResult.finalUrl,
-          duration: finalizeResult.duration,
-          processingTime: finalizeResult.processingTime,
-        }
-      }
+      let responseData ={
+        video
+      } 
 
       responseData.database = {
-        id: video.id,
-        title: video.title,
-        status: video.status,
+        id:video.id,
+        title:video.title,
+        status:video.status
       }
 
-      return response.json({
+      return response.ok({
         success: true,
-        message: finalizeResult
-          ? 'Video uploaded, processed, and saved'
-          : 'Video uploaded and saved',
-        data: responseData,
+        message: 'Video uploaded and processed',
+        data: responseData
       })
-    } catch (error: any) {
-      console.error('❌ Error:', error.message)
-
-      return response.status(500).json({
-        success: false,
-        message: error.message || 'Video processing failed',
-      })
+    } finally {
+      await VideoTempManager.cleanup(temp)
     }
   }
 
@@ -211,111 +225,6 @@ export default class VideoFinalizeController {
     }
   }
 
-  /**
-   * Finalize video with filters and trimming
-   * POST /api/v1/videos/finalize
-   */
-  // async finalizeVideo({ request, response }: HttpContext) {
-  //   try {
-  //     console.log('📨 Received finalize request')
-
-  //     // Get request data
-  //     const videoUrl = request.input('videoUrl')
-  //     const duration = request.input('duration')
-  //     const filtersStr = request.input('filters')
-  //     const trimDataStr = request.input('trimData')
-
-  //     console.log('Received inputs:', {
-  //       videoUrl: videoUrl?.substring(0, 50) + '...',
-  //       duration,
-  //       filtersStr: filtersStr?.substring(0, 50) + '...',
-  //       trimDataStr,
-  //     })
-
-  //     // ✅ Validate required fields
-  //     if (!videoUrl || !filtersStr || !trimDataStr) {
-  //       return response.status(400).json({
-  //         success: false,
-  //         message: 'Missing required fields: videoUrl, filters, trimData',
-  //       })
-  //     }
-
-  //     // ✅ Parse JSON strings
-  //     let filters, trimData
-  //     try {
-  //       filters = JSON.parse(filtersStr)
-  //       trimData = JSON.parse(trimDataStr)
-  //       console.log('✅ Parsed filters and trimData')
-  //     } catch (parseError) {
-  //       return response.status(400).json({
-  //         success: false,
-  //         message: 'Invalid JSON in filters or trimData',
-  //       })
-  //     }
-
-  //     console.log('✅ Request validation passed')
-
-  //     // ✅ FIX: Create service instance before calling method
-  //     const videoFinalizeService = new VideoFinalizeService()
-  //     console.log('✅ Service instance created')
-
-  //     // ✅ FIX: Call method on instance
-  //     console.log('🎬 Calling finalizeVideoProcessing...')
-  //     const result = await videoFinalizeService.finalizeVideoProcessing(
-  //       videoUrl,
-  //       filters,
-  //       trimData
-  //     )
-
-  //     console.log('✅ Finalization successful')
-  //     console.log('Result:', {
-  //       videoId: result.videoId,
-  //       duration: result.duration,
-  //       processingStatus: result.processingStatus,
-  //     })
-      
-  //     const extension = result.finalUrl.split('.').pop();
-  //     const lastPart = result.videoId.split('/').pop();
-  //     const originalName = `${lastPart}.${extension}`
-
-  //     const video = await Video.create({
-  //       userId: 1,
-  //       title: lastPart,
-  //       originalFilename: originalName || 'unknown',
-  //       storagePath: result.uploaded.public_id, // ✅ FIXED
-  //       fileSize: result.uploaded.bytes,
-  //       mimeType: `video/${result.uploaded.format}`,
-  //       status: 'uploaded',
-  //       extension: result.uploaded.format,
-  //       uploadTime: DateTime.now(),
-  //       uploadDuration: result.uploaded.duration,
-  //       cloudinaryPublicId: result.uploaded.public_id,
-  //       cloudinaryUrl: result.uploaded.secure_url,
-  //       cloudinaryStreamingUrl:result.uploaded.playback_url,
-  //       type:'video'
-  //     })
-
-  //     return response.json({
-  //       success: true,
-  //       message: 'Video processed successfully',
-  //       data: result,
-  //     })
-  //   } catch (error: any) {
-  //     console.error('❌ Finalization error:', error.message)
-  //     console.error('❌ Error type:', error.constructor.name)
-  //     console.error('❌ Stack:', error.stack?.substring(0, 500))
-
-  //     return response.status(500).json({
-  //       success: false,
-  //       message: error.message || 'Video processing failed',
-  //     })
-  //   }
-  // }
-
-  /**
-   * Get video processing status
-   * GET /api/v1/videos/:videoId/status
-   */
   async getProcessingStatus({ request, response }: HttpContext) {
     try {
       const videoId = request.param('videoId')
