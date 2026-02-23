@@ -94,81 +94,9 @@ const LiveStreamsController = () => import('#controllers/live_streams_controller
     })
     .prefix('/api/live-streams')
 
-
-// ───────────────────────────────────────────────────────────
-// NEW ROUTES - Add these below your existing routes
-// ───────────────────────────────────────────────────────────
-
-/**
- * Finalize video processing
- * Apply filters and trim, then upload to Cloudinary
- * POST /api/v1/videos/finalize
- * 
- * Body (JSON):
- * {
- *   videoUrl: string,        // Cloudinary video URL
- *   duration: number,        // Video duration in seconds
- *   filters: {
- *     brightness: 0-200,     // Default: 100
- *     contrast: 0-200,       // Default: 100
- *     saturation: 0-200,     // Default: 100
- *     hue: 0-360,            // Default: 0
- *     blur: 0-20,            // Default: 0
- *     sharpen: 0-200,        // Default: 100
- *     opacity: 0-100         // Default: 100
- *   },
- *   trimData: {
- *     start: number,         // Start time in seconds
- *     end: number            // End time in seconds
- *   },
- *   videoId?: string         // Optional
- * }
- * 
- * Response:
- * {
- *   success: true,
- *   message: "Video processed successfully",
- *   data: {
- *     videoId: string,
- *     finalUrl: string,
- *     processingStatus: "completed",
- *     duration: number,
- *     appliedFilters: object,
- *     processingTime: number
- *   }
- * }
- */
-router.post('/api/v1/videos/finalize', [VideoFinalizeController, 'finalizeVideo'])
-
-/**
- * Get video processing status
- * GET /api/v1/videos/:videoId/status
- * 
- * Response:
- * {
- *   success: true,
- *   data: {
- *     videoId: string,
- *     status: "queued|processing|completed|failed",
- *     progress: 0-100,
- *     message: string
- *   }
- * }
- */
-router.get('/api/v1/videos/:videoId/status', [VideoFinalizeController, 'getProcessingStatus'])
-
-/**
- * Cancel video processing
- * DELETE /api/v1/videos/:videoId/cancel
- * 
- * Response:
- * {
- *   success: true,
- *   message: "Processing cancelled successfully",
- *   data: {
- *     videoId: string,
- *     cancelledAt: string
- *   }
- * }
- */
-router.delete('/api/v1/videos/:videoId/cancel', [VideoFinalizeController, 'cancelProcessing'])
+  router.group(()=>{
+    router.post('/videos/finalize', [VideoFinalizeController, 'finalizeVideo'])
+    router.get('/videos/:videoId/status', [VideoFinalizeController, 'getProcessingStatus'])
+    router.delete('/videos/:videoId/cancel', [VideoFinalizeController, 'cancelProcessing'])
+  })
+  .prefix('/api/v1')
